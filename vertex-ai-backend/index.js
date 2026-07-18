@@ -1271,6 +1271,7 @@ Example: 1. [QLABEL:1] A [#P:1,50,400]  11. [QLABEL:11] B [#P:1,50,930]
 - Content is VOID only if clearly SCRIBBLED OUT or crossed with a HEAVY X.
 - LAYOUT MARKERS ARE NOT DELETIONS: dashes, arrows, bullets, underlines do not void anything — the text next to them is VALID.
 - QUESTION-NUMBER PROTECTION: a small "x"/"×" NEXT TO a label ("Ques 9 x", "Q9 ×") is the student's own notation, NEVER a deletion. The number is VALID — transcribe it with its [QLABEL]. Only a mark drawn DIRECTLY OVER the characters voids them.
+- CORRECTION MARKER: if a voided attempt (per this law) is immediately followed by a fresh attempt at the SAME answer (student crossed out one MCQ letter/short answer and wrote a replacement right after) — this is a correction, the riskiest case to misread. Prefix the surviving answer with the literal tag [CORRECTED] before transcribing it, e.g. "5) [CORRECTED] c)". Do NOT add this tag for stray scribbles, rough-work cross-outs, or single-character fixes mid-word — only for a full replaced attempt at the answer itself.
 
 # RED INK (TEACHER/EXAMINER MARKS)
 ALL red ink = examiner marks (ticks, crosses, circles, underlines, scores like "4/5", comments, corrections). IGNORE ENTIRELY — never transcribe it. Read THROUGH red ink to the blue/black student text underneath; never let it cause a misread. "Ans" + red-circle-over-"1" + "3" = "Ans 13", not "Ans 3".
@@ -1483,6 +1484,11 @@ A subpart label right after question number, before any option content.
 An Assertion-Reason statement label ("A is true, R is false") — not the answer choice.
 Struck-through letter — ignore it, use final surviving letter only.
 Two letters genuinely both stand, no strikethrough → requiresReview:true, marksAwarded:0.
+[CORRECTED] tag present on this answer → the student crossed out one attempt and wrote another.
+  This is the single highest-risk case for a misread letter, even when the surviving letter looks
+  clean. ALWAYS set requiresReview:true here. Still grade normally (Steps 2-3) and award marks
+  based on your best reading — do not zero it out — the flag is only so a teacher glances at it;
+  do not let it change letterCorrect/textCorrect.
 
 STEP 2 — FIND STUDENT'S TEXT.
 Check independently if written words match content of any one option.
@@ -1499,6 +1505,7 @@ MCQ DOUBLE-CHECK (verify only, don't re-derive):
 1. Confirm surviving letter after strikethrough/label exclusions.
 2. Confirm matched option from Step 2.
 3. Confirm OR logic applied correctly.
+4. Confirm requiresReview:true is set if [CORRECTED] appears anywhere in this question's text.
 
 
 
@@ -6855,6 +6862,12 @@ const isMcqFormat = (qr.type === 'MCQ') || (qr.type === 'AR') ||
                     } else {
 const rawOcr = (qr.studentText || qr.studentOcrAnswer || '');
 
+// [CORRECTED] = OCR marked a crossed-out-then-rewritten answer (see OCR CORRECTION
+// MARKER law). The surviving answer is whatever the student wrote AFTER the tag.
+// Without this, the deterministic extractor below grabs the FIRST letter it sees —
+// i.e. the struck-out attempt — and wrongly scores the corrected MCQ as 0.
+const _hasCorrectedTag = /\[CORRECTED\]/i.test(rawOcr);
+
 let studentLetter = '';
 let _extractedSubPart = '';
 let _p0SucceededForSubpart = false;
@@ -6929,6 +6942,19 @@ if (!studentLetter) {
     if (p4) studentLetter = p4[1].toUpperCase();
 }
 
+// [CORRECTED] OVERRIDE (highest authority): if the OCR tagged a rewritten answer,
+// the surviving letter is the one AFTER the last [CORRECTED] marker — it WINS over
+// whatever Patterns 0-4 picked (which may have grabbed the struck-out first letter).
+if (_hasCorrectedTag) {
+    const _tagIdx = rawOcr.toUpperCase().lastIndexOf('[CORRECTED]');
+    const _afterTag = rawOcr.slice(_tagIdx + '[CORRECTED]'.length);
+    const _pc = _afterTag.match(/\(?\[?([A-Da-d])\]?\)?(?:[)\].\s:,]|$)/);
+    if (_pc) {
+        studentLetter = _pc[1].toUpperCase();
+        console.log(`[MCQ Corrected] Q${qr.questionNumber}: [CORRECTED] surviving letter="${studentLetter}"`);
+    }
+}
+
 // Shared-text subpart guard:
 // When both Q1(i) and Q1(ii) share the same inherited text block, the patterns
 // above may extract the wrong letter (e.g. picks option "(i)" text as the answer).
@@ -6963,7 +6989,9 @@ const syncedSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
                                 ? (isCorrect ? '' : 'Incorrect')
                                 : (step.comment || '')
                         }));
-                        return { ...qr, marksAwarded: overrideMarks, finalFeedback: overrideFeedback, requiresReview: false, stepWiseEvaluation: syncedSteps };
+                        // Flag corrected answers for a teacher glance (per [CORRECTED] law),
+                        // but keep the awarded marks — do not zero a correctly-read correction.
+                        return { ...qr, marksAwarded: overrideMarks, finalFeedback: overrideFeedback, requiresReview: _hasCorrectedTag, stepWiseEvaluation: syncedSteps };
                     }
 
                     // FALLBACK: studentText was empty (dense MCQ block — Librarian didn't slice it)
@@ -7281,6 +7309,49 @@ const detailDoc = cleanUndefined({
     await submissionRef.collection('detail').doc('report').set(detailDoc);
     console.log(`[Job ${jobId}] Exam graded — saved split to assessmentHistory`);
 }
+
+            // ─── TRAINING TRACE CAPTURE (immutable Gemini-original snapshot) ──────────
+            // Stores Gemini's ORIGINAL per-question grades to GCS *before* any teacher
+            // edit on the frontend. Firestore reports get edited in place, so without
+            // this we lose the "what Gemini first said" side of every future training
+            // pair. Cost: one small JSON object per copy, off the hot path. Never throws.
+            try {
+                const safeSubject = (subject || 'unknown').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') || 'unknown';
+                const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+                const trace = {
+                    schemaVersion: 1,
+                    capturedAt: new Date().toISOString(),
+                    jobId,
+                    teacherUid,
+                    assessmentId,
+                    studentUid,
+                    subject,
+                    isHomework: !!jobData.isHomework,
+                    answerSheetImageUrls: reportForStudent.answerSheetImageUrls || [], // references, not copies
+                    // Gemini's original output per question (pre human-edit):
+                    questions: (reconstructedReport || []).map(qr => ({
+                        questionNumber: qr.questionNumber,
+                        text: qr.text || '',
+                        model_answer: qr.answer || '',
+                        rubric: qr.rubric || null,
+                        checking_instructions: qr.checkingInstructions || '',
+                        max_marks: qr.maxMarksForQuestion,
+                        type: qr.type || qr.questionType || '',
+                        student_answer_ocr: (qr.studentOcrAnswer || '').slice(0, 6000),
+                        gemini_awarded: qr.marksAwarded,
+                        gemini_step_evaluation: qr.stepWiseEvaluation || [],
+                        gemini_feedback: qr.finalFeedback || ''
+                    }))
+                };
+                const objectPath = `training-traces/${safeSubject}/${day}/${teacherUid}_${assessmentId}_${studentUid}.json`;
+                await storage.bucket().file(objectPath).save(JSON.stringify(trace), {
+                    resumable: false,
+                    contentType: 'application/json'
+                });
+            } catch (traceErr) {
+                console.warn(`[TrainingTrace] capture failed (non-critical): ${traceErr.message}`);
+            }
+            // ─── END TRAINING TRACE CAPTURE ──────────────────────────────────────────
 
             // Queue doc cleanup — same for both paths
             await snapshot.ref.delete();
