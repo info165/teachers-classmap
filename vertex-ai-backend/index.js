@@ -1414,6 +1414,10 @@ Expressed = shown cause, effect, mechanism, definition, or reasoning.
 Keyword alone, no support = does not satisfy step.
 Accept any wording, any method, if understanding is real.
 
+## RESULT-STEP LAW (final-answer steps)
+A rubric step that requires a specific FINAL ANSWER, final value, final expression, or numeric RESULT (e.g. "Correct final answer: 2%", "final expression v = k√(as)", "final percentage error") is a RESULT step. Award a RESULT step ONLY when the student's final value/expression MATCHES the model's (equivalent forms, units, and reasonable rounding are fine). If the student's final number/expression is WRONG, that RESULT step = 0 — even if the working looks partly right, and even if an earlier method step was satisfied.
+This law is SCOPED to result/final steps only. It does NOT change SETUP / METHOD / DERIVATION steps: grade each of those independently on its own merit — a correct setup still earns its step even when the final answer is wrong, and a wrong final must NEVER drag down a correctly-earned earlier step. Do not become harsher on method steps because of this rule; only withhold the final-result step when the final is actually wrong.
+
 ## CURRENCY TOLERANCE
 ₹ may OCR as garbled digit/text. Ignore symbol. Judge only the number.
 
