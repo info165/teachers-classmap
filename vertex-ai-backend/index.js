@@ -7058,38 +7058,48 @@ if (qr._resolvedMcqLetter) {
 console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" model="${modelLetter}" subPart="${_extractedSubPart}" p0ok=${_p0SucceededForSubpart} sharedText=${_hasSharedMultipartText} rawOcr="${rawOcr.substring(0,80)}"`);
 
                     // ── textCorrect RESCUE (RUBRIC: "Full marks if letterCorrect OR textCorrect") ──
-                    // The letter-only logic below wrongly zeroes a student who wrote the CORRECT
-                    // option's TEXT but mislabelled/misread the letter (e.g. wrote the correct
-                    // expression "LT^-3, LT^-2, LT^-1" but tagged it "d)"). Recover those: if the
-                    // student's writing contains the correct option's text and NOT a distractor's,
-                    // treat as correct even when the letter disagrees. Guards prevent false hits:
-                    //   • min length 6 after normalisation (skip trivial options like "1", "2s")
-                    //   • if a distractor option's text (equal-or-longer) is ALSO present → abstain
-                    //     (covers OCR that captured the printed question with all options).
+                    // Recover a student who wrote the CORRECT option's TEXT but mislabelled/misread
+                    // the letter (e.g. wrote "LT^-3, LT^-2, LT^-1" but tagged it "d)").
+                    // Matching is TOKEN-SEQUENCE based (not raw substring) so that a distinguishing
+                    // number cannot be ignored: "2π rad/s" must NOT match "π rad/s". LaTeX is
+                    // normalised (\text{ rad}->rad, \pi->pi) so formatting doesn't break the match.
+                    // Guards: correct option must be substantive (>=5 chars, not a single 1-2 char
+                    // token like "1"/"2s"); a bare number immediately before the match is rejected.
+                    // Note: options[] is not stored per question here, so we parse the correct option
+                    // text from the model answer and rely on the token rules above (no distractor list).
                     let _textCorrect = false;
                     {
-                        const _norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                        const _letterIdx = { A: 0, B: 1, C: 2, D: 3 };
-                        const _opts = qr.options;
-                        const _getOpt = (L) => {
-                            if (!_opts || typeof _opts !== 'object') return '';
-                            if (Array.isArray(_opts)) return _opts[_letterIdx[L]] || '';
-                            return _opts[L] || _opts[L.toLowerCase()] || _opts[L.toUpperCase()] || '';
+                        const _tok = s => String(s || '')
+                            .replace(/\\text\s*\{([^}]*)\}/gi, ' $1 ')
+                            .replace(/\\(?:left|right|displaystyle|mathrm|mathbf|hat|vec|bar|frac|sqrt)\b/gi, ' ')
+                            .replace(/\\([a-zA-Z]+)/g, '$1')      // \pi->pi (kept attached: "2\pi"->"2pi")
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, ' ')
+                            .trim().split(/\s+/).filter(Boolean);
+                        const _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
+                        const _need = _tok(_correctText);
+                        // Strip structural tags/labels first so the label number (e.g. the "9" in
+                        // "[QLABEL:Ans 9]") is not mistaken for a coefficient before the answer text.
+                        const _hayText = rawOcr
+                            .replace(/\[QLABEL:[^\]]*\]/gi, ' ')
+                            .replace(/\[#P:[^\]]*\]/gi, ' ')
+                            .replace(/\[PAGE[^\]]*\]/gi, ' ')
+                            .replace(/\bAns\.?\s*\d+/gi, ' ');
+                        const _hay  = _tok(_hayText);
+                        const _needChars = _need.join('').length;
+                        const _seqIn = (hay, need) => {
+                            if (!need.length) return false;
+                            for (let i = 0; i + need.length <= hay.length; i++) {
+                                let ok = true;
+                                for (let j = 0; j < need.length; j++) if (hay[i + j] !== need[j]) { ok = false; break; }
+                                // reject "2 pi rad s" matching "pi rad s": a bare number just before wins
+                                if (ok && i > 0 && /^\d+$/.test(hay[i - 1]) && !/^\d/.test(need[0])) ok = false;
+                                if (ok) return true;
+                            }
+                            return false;
                         };
-                        let _correctText = _getOpt(modelLetter);
-                        const _distractors = [];
-                        for (const L of ['A', 'B', 'C', 'D']) if (L !== modelLetter) { const t = _getOpt(L); if (t) _distractors.push(t); }
-                        if (!_correctText) {
-                            // Fallback: strip the leading "X)" prefix from the model answer text.
-                            _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
-                        }
-                        const _cNorm = _norm(_correctText);
-                        const _ocrNorm = _norm(rawOcr);
-                        if (_cNorm.length >= 6 && _ocrNorm.includes(_cNorm)) {
-                            const _distractorPresent = _distractors
-                                .map(_norm)
-                                .some(d => d.length >= _cNorm.length && _ocrNorm.includes(d));
-                            if (!_distractorPresent) _textCorrect = true;
+                        if (_needChars >= 5 && !(_need.length === 1 && _need[0].length <= 2) && _seqIn(_hay, _need)) {
+                            _textCorrect = true;
                         }
                         if (_textCorrect) console.log(`[MCQ textCorrect] Q${qr.questionNumber}: written answer matches correct option ${modelLetter} (letter="${studentLetter || '?'}")`);
                     }
