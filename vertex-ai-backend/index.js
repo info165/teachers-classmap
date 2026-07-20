@@ -231,6 +231,55 @@ function suppressOrphanQLabels(text) {
     return rebuilt;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COVER-PAGE / MARKS-GRID QLABEL SUPPRESSOR
+//
+// The OCR (and the post-OCR QLABEL-injection passes) sometimes emit [QLABEL] tags
+// for PRINTED cover-page content — the marks-summary grid ("Q1 | Q16 | Q31 …") and
+// the numbered general instructions ("1) Fill in all the details…"). These
+// normalize to the SAME keys as real answers ("1".."15") and hijack the librarian,
+// which then grades the printed cover text instead of the student's answer
+// (observed: whole papers scored against the marks grid / instructions).
+//
+// This deterministic pass runs AFTER assembly/injection and strips those QLABELs so
+// they can never be mapped. Three scoped rules, safe for real answers:
+//   (a) QLABELs INSIDE a marks-grid [TABLE] block (handles the grid whether it is a
+//       full cover page or sits at the TOP of an answer page — only the table's
+//       QLABELs go, answers below are untouched).
+//   (b) ALL QLABELs on a page that is a PURE cover/header page (cover signatures AND
+//       no "Ans N" answer markers).
+//   (c) QLABELs on individual lines that are exam form-fields or standard instructions.
+// Accounts/subject answer tables are NOT marks grids (no "Marks"+Q-number signature),
+// so they are left alone.
+// ─────────────────────────────────────────────────────────────────────────────
+function stripCoverPageArtifacts(text) {
+    if (!text) return text;
+    const stripQ = s => s.replace(/\[QLABEL:[^\]]*\]/gi, '');
+    const FORM_FIELD_RE = /(enroll|\broll\s*no\b|signature of (?:invigilator|the examiner)|academic session|date of examination|general instructions|fill in all the details|not allowed to move out|answer script|unfair means|examination room)/i;
+
+    // (a) marks-grid TABLE block → strip its QLABELs, wherever the block is.
+    text = text.replace(/\[TABLE[^\]]*\][\s\S]*?\[\/TABLE\]/gi, (block) => {
+        const isMarksGrid = /marks/i.test(block) &&
+            ((block.match(/Q\s*\d+/gi) || []).length >= 4 || /signature of the examiner/i.test(block) || /\btotal\b/i.test(block));
+        return isMarksGrid ? stripQ(block) : block;
+    });
+
+    // (b) pure cover pages → strip all QLABELs; (c) otherwise strip form/instruction lines only.
+    const parts = text.split(/(\[PAGE\s+\d+\])/i);
+    let out = '';
+    for (const seg of parts) {
+        if (/^\[PAGE\s+\d+\]$/i.test(seg) || seg === '') { out += seg; continue; }
+        const instrHits = (seg.match(/fill in all the details|not allowed to move out|answer script|unfair means|general instructions/gi) || []).length;
+        const formHits  = (seg.match(/enroll|signature of invigilator|academic session|date of examination|\broll\s*no\b/gi) || []).length;
+        const marksGrid = /marks/i.test(seg) && (seg.match(/Q\s*\d+/gi) || []).length >= 6;
+        const isCoverSig = marksGrid || instrHits >= 2 || formHits >= 3;
+        const hasRealAnswers = /\bAns\.?\s*\d/i.test(seg);
+        if (isCoverSig && !hasRealAnswers) out += stripQ(seg);
+        else out += seg.split('\n').map(l => FORM_FIELD_RE.test(l) ? stripQ(l) : l).join('\n');
+    }
+    return out;
+}
+
 
 const MAX_OCR_DIM = 1600;
 
@@ -5603,7 +5652,7 @@ if (!imageParts || imageParts.length === 0) {
             // ─── OCR (UNCHANGED) ─────────────────────────────────────────────────────
 const pagesResult = await extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections);
 const masterIds = questions.map(q => q.questionNumber);
-const fullTranscript = sanitizeQLabelTranscript(pagesResult.map(p => `[PAGE ${p.pageNum}]\n${p.text}`).join('\n\n'), masterIds);
+const fullTranscript = stripCoverPageArtifacts(sanitizeQLabelTranscript(pagesResult.map(p => `[PAGE ${p.pageNum}]\n${p.text}`).join('\n\n'), masterIds));
 
             const fullTranscriptClean = suppressOrphanQLabels(fullTranscript);
 
