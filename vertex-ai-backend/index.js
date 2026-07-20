@@ -6887,14 +6887,35 @@ let _p0SucceededForSubpart = false;
         _extractedSubPart = subPart;
         let p0;
         if (subPart) {
+            // Pattern 0-QLABEL (highest authority for subparts): anchor on THIS subpart's
+            // own [QLABEL:...] tag, which reliably contains the exact subpart in every OCR
+            // format seen ("Ans 22.i)", "Ans 22 (i)"), then take the first A-D option after
+            // it (before the next [QLABEL:]). Fixes shared-block subparts where the printed
+            // "(i)"-style patterns below miss because OCR emitted ".i)" with QLABEL noise.
+            // Lookbehind (?<![ivx]) stops "i" matching inside "ii"/"iii".
+            {
+                const _qlRe = new RegExp(`\\[QLABEL:[^\\]]*?${mainNum}[^\\]]*?(?<![ivx])${subPart}\\)[^\\]]*?\\]`, 'i');
+                const _qm = _qlRe.exec(rawOcr);
+                if (_qm) {
+                    const _start = _qm.index + _qm[0].length;
+                    const _next = rawOcr.indexOf('[QLABEL:', _start);
+                    const _seg = rawOcr.slice(_start, _next === -1 ? undefined : _next);
+                    const _lm = _seg.match(/\(\s*([A-Da-d])\s*\)/) || _seg.match(/(?:^|[\s])([A-Da-d])\s*[\).]/);
+                    if (_lm) {
+                        studentLetter = _lm[1].toUpperCase();
+                        _p0SucceededForSubpart = true;
+                        console.log(`[MCQ SubpartQLabel] Q${qr.questionNumber}: anchored letter="${studentLetter}"`);
+                    }
+                }
+            }
             // Sub-part question: find mainNum then (subPart) then first A-D after
             const re = new RegExp(
                 `(?:^|[\\s])(?:Ans\\.?\\s*)?${mainNum}[^(]*\\(${subPart}\\)\\s*[^A-Da-d\\n]*?([A-Da-d])(?:[)\\s]|$)`,
                 'im'
             );
-            p0 = rawOcr.match(re);
+            if (!studentLetter) p0 = rawOcr.match(re);
             // Fallback: just find (subPart) then first A-D
-            if (!p0) {
+            if (!studentLetter && !p0) {
                 const re2 = new RegExp(`\\(${subPart}\\)\\s*([A-Da-d])(?:[)\\s]|$)`, 'im');
                 p0 = rawOcr.match(re2);
             }
