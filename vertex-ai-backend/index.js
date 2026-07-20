@@ -254,17 +254,22 @@ function suppressOrphanQLabels(text) {
 // ─────────────────────────────────────────────────────────────────────────────
 function stripCoverPageArtifacts(text) {
     if (!text) return text;
-    const stripQ = s => s.replace(/\[QLABEL:[^\]]*\]/gi, '');
+    // Note: we REMOVE cover content, not merely strip [QLABEL] tags. The librarian
+    // also detects question boundaries from RAW numeric prefixes ("1) Fill in all
+    // the details…"), so leaving the text with only the tag removed still lets the
+    // printed instructions be mapped as "answer 1". Removing the content is the only
+    // reliable fix and matches the intent: the cover/header must be fully ignored.
     const FORM_FIELD_RE = /(enroll|\broll\s*no\b|signature of (?:invigilator|the examiner)|academic session|date of examination|general instructions|fill in all the details|not allowed to move out|answer script|unfair means|examination room)/i;
 
-    // (a) marks-grid TABLE block → strip its QLABELs, wherever the block is.
+    // (a) Remove marks-grid [TABLE] blocks entirely, wherever they appear.
     text = text.replace(/\[TABLE[^\]]*\][\s\S]*?\[\/TABLE\]/gi, (block) => {
         const isMarksGrid = /marks/i.test(block) &&
             ((block.match(/Q\s*\d+/gi) || []).length >= 4 || /signature of the examiner/i.test(block) || /\btotal\b/i.test(block));
-        return isMarksGrid ? stripQ(block) : block;
+        return isMarksGrid ? '\n' : block;
     });
 
-    // (b) pure cover pages → strip all QLABELs; (c) otherwise strip form/instruction lines only.
+    // (b) pure cover/header pages → drop ALL content; (c) answer pages → drop only
+    //     the individual form-field / instruction lines.
     const parts = text.split(/(\[PAGE\s+\d+\])/i);
     let out = '';
     for (const seg of parts) {
@@ -274,8 +279,11 @@ function stripCoverPageArtifacts(text) {
         const marksGrid = /marks/i.test(seg) && (seg.match(/Q\s*\d+/gi) || []).length >= 6;
         const isCoverSig = marksGrid || instrHits >= 2 || formHits >= 3;
         const hasRealAnswers = /\bAns\.?\s*\d/i.test(seg);
-        if (isCoverSig && !hasRealAnswers) out += stripQ(seg);
-        else out += seg.split('\n').map(l => FORM_FIELD_RE.test(l) ? stripQ(l) : l).join('\n');
+        if (isCoverSig && !hasRealAnswers) {
+            out += '\n[COVER/HEADER PAGE — IGNORED]\n'; // fully ignore printed cover
+        } else {
+            out += seg.split('\n').filter(l => !FORM_FIELD_RE.test(l)).join('\n');
+        }
     }
     return out;
 }
