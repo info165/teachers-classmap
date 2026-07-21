@@ -7049,13 +7049,34 @@ let _p0SucceededForSubpart = false;
                 p0 = rawOcr.match(re2);
             }
         } else {
-            // Simple question — try multiple formats in priority order:
-            // 1. "Ans N : (d)" or "Ans N: d" (most explicit)
-            const ansRe = new RegExp(`(?:^|[\\s])Ans\\.?\\s*${mainNum}\\s*[:.]+\\s*\\(?([A-Da-d])\\)?`, 'im');
-            p0 = rawOcr.match(ansRe);
-            // 2. "N) d" or "N. d" or "N : d"
-            if (!p0) {
+            // Pattern 0-QLABEL (highest authority): anchor on THIS question's own
+            // [QLABEL:Ans N …]. Handles the "Ans N [QLABEL:Ans N] (x) [QLABEL:Ans N (x)]"
+            // MCQ layout where the letter sits AFTER the injected QLABEL — the "Ans N:" /
+            // "N)" patterns below miss it, so the extractor used to fall through to the
+            // first letter in a shared blob (Ans 1's), mis-scoring every other MCQ.
+            // \bAns\s*N\b keeps "Ans 3" from matching inside "Ans 13".
+            {
+                // (1) letter embedded in the answer's own QLABEL: [QLABEL:Ans N (x)]
+                let _qm = rawOcr.match(new RegExp(`\\[QLABEL:[^\\]]*?\\bAns\\s*${mainNum}\\s*\\(?([A-Da-d])\\)?\\s*\\]`, 'i'));
+                // (2) else first A-D right after the "Ans N" QLABEL, before the next label
+                if (!_qm) {
+                    const _q = rawOcr.match(new RegExp(`\\[QLABEL:[^\\]]*?\\bAns\\s*${mainNum}\\b[^\\]]*\\]`, 'i'));
+                    if (_q) {
+                        const _after = rawOcr.slice(_q.index + _q[0].length);
+                        const _cut = _after.search(/\[QLABEL:|(?:^|\s)Ans\s*\d/i);
+                        const _seg = _cut > 0 ? _after.slice(0, _cut) : _after;
+                        _qm = _seg.match(/\(?\s*([A-Da-d])\s*\)?(?:[).\s]|$)/);
+                    }
+                }
+                if (_qm) studentLetter = _qm[1].toUpperCase();
+            }
+            // Fallbacks (original): "Ans N : (d)" then "N) d"
+            if (!studentLetter) {
+                const ansRe = new RegExp(`(?:^|[\\s])Ans\\.?\\s*${mainNum}\\s*[:.]+\\s*\\(?([A-Da-d])\\)?`, 'im');
+                p0 = rawOcr.match(ansRe);
+                if (!p0) {
 p0 = rawOcr.match(new RegExp(`(?:^|[\\s\\[])${mainNum}[).:–-]+\\s*\\(?([A-Da-d])\\)?(?:[)\\s]|$)`, 'im'));
+                }
             }
         }
         if (p0) {
