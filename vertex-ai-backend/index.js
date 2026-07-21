@@ -2205,7 +2205,7 @@ const isPdfJob = imageParts.length > 0 && (
 generationConfig: {
                         candidateCount: 1,
                         seed: 42,
-temperature: 0.15,
+temperature: 0,   // was 0.15 — matches the image OCR path; determinism > slight loop-avoidance
                         topP: 0.5,
                         maxOutputTokens: 16000,
  // 30 pages of handwriting needs ~10k-20k tokens; 4096 truncates at page 3
@@ -3574,6 +3574,12 @@ if (useThinking) {
             generationConfig: {
                 responseMimeType: "application/json",
                 temperature: 0.0,
+                // Determinism: pin sampling so the same answer grades the same way run-to-run.
+                // (Flash is still not bit-for-bit deterministic, and thinkingBudget adds
+                // residual variance, but seed + single candidate remove the biggest wobble.)
+                seed: 42,
+                candidateCount: 1,
+                topP: 0,
                 responseSchema: responseSchema,
                 thinkingConfig: { thinkingBudget }
             }
@@ -3699,6 +3705,9 @@ async function librarianTagMapper(fullTranscript, questions, subject) {
 
 generationConfig: {
     temperature: 0,
+    seed: 42,
+    candidateCount: 1,
+    topP: 0,
     responseMimeType: "application/json",
     thinkingConfig: { thinkingBudget: 600 }
 }
