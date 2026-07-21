@@ -6324,6 +6324,65 @@ if (ownMapping && ownMapping._gapText) {
         });
     }
 });
+
+            // ── ORPHAN-ANSWER RECOVERY (safe, additive) ─────────────────────────────
+            // A question can end up with a FOREIGN bleed slice (a DIFFERENT question's
+            // answer) when the boundary resolver mis-places a label — observed with a
+            // sub-lettered OR label sitting right before a [DIAGRAM] (e.g. "Ans 23. (b)"
+            // → Q23.B wrongly received Q22's text). If a question's slice is a foreign
+            // bleed AND its OWN answer label exists in the transcript, re-slice from that
+            // own label. It ONLY fires on foreign-bleed + findable own-label, so a
+            // correctly-mapped question (whose slice already contains its own label) is
+            // never touched.
+            (function recoverOrphanAnswers(qs) {
+                const _root = s => (String(s || '').match(/(\d+)/) || [])[1] || '';
+                const labelRe = /\[QLABEL:([^\]]+)\]/g;
+                const labelHits = [];
+                let lm;
+                while ((lm = labelRe.exec(fullTranscript)) !== null) {
+                    const raw = lm[1].trim();
+                    labelHits.push({ pos: lm.index, end: lm.index + lm[0].length, raw, root: _root(raw), norm: normalizeLabelForMatch(raw, masterIds), used: false });
+                }
+                for (const q of qs) {
+                    const myNorm = normalizeLabelForMatch(q.questionNumber, masterIds);
+                    const myRoot = _root(q.questionNumber);
+                    const txt = q.studentText || '';
+                    if (!myNorm || !myRoot || txt.length < 10) continue;
+                    // What question does the slice START with? A correctly-mapped question
+                    // always begins with its OWN label; if it begins with a DIFFERENT
+                    // question's label, the slice is a foreign bleed. (Checking only the
+                    // start is what makes this safe — a trailing bleed of the next answer
+                    // does not trigger it, and working questions are never disturbed.)
+                    const fm = txt.match(/\[QLABEL:[^\]]*?(\d+)[^\]]*\]|(?:^|\s)Ans\.?\s*(\d+)/i);
+                    const bleedRoot = fm ? (fm[1] || fm[2]) : '';
+                    if (!bleedRoot || bleedRoot === myRoot) continue; // starts with own label → not a bleed
+                    // Locate this question's OWN answer in the transcript.
+                    // OR pairs (12.A/12.B, 23.A/23.B, …): the student wrote ONE answer under the
+                    // parent number ("Ans 23"); recover the WHOLE parent block by digit-root and
+                    // let both OR sides share it (grader picks the winner). Using a sub-lettered
+                    // match here would wrongly split a subpart-labelled answer across the sides.
+                    // Non-OR: match this question's exact normalized id, and claim it (used) so a
+                    // sibling can't grab the same span.
+                    const isOR = /alternative question \(or\)/i.test(q.checkingInstructions || '') || /\.[AB]$/i.test(String(q.questionNumber));
+                    const own = isOR
+                        ? labelHits.filter(h => h.root === myRoot).sort((a, b) => a.pos - b.pos)[0]
+                        : labelHits.find(h => h.norm === myNorm && !h.used);
+                    if (!own) continue;
+                    // Slice from just after the own label to the next label of a DIFFERENT root.
+                    let sliceEnd = fullTranscript.length;
+                    for (const h of labelHits) {
+                        if (h.pos > own.end && h.root && h.root !== myRoot) { sliceEnd = h.pos; break; }
+                    }
+                    const recovered = fullTranscript.substring(own.end, sliceEnd).trim();
+                    if (recovered.length >= 10) {
+                        q.studentText = recovered;
+                        q.requiresReview = true;
+                        if (!isOR) own.used = true;
+                        console.log(`[OrphanRecovery] Q${q.questionNumber}: re-sliced from own label "${own.raw}"${isOR ? ' (OR parent)' : ''} (was foreign bleed of Q${bleedRoot})`);
+                    }
+                }
+            })(questions);
+
             // ── SUBPART TEXT INHERITANCE ────────────────────────────────────────────
             // Problem: OCR emits ONE [QLABEL:Ans 1] for both Q1(i) and Q1(ii).
             // Deterministic resolver maps all [#P] tags to Q1(i) (first match).
