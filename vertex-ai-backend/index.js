@@ -2284,10 +2284,13 @@ const normalizedTranscript = (pdfTranscript || transcript || "")
 const pageSplitter = /\[PAGE\s+(\d+)\]/gi;
 const segments = normalizedTranscript.split(pageSplitter);
 
+        // Same fix as the image-batch path: assign by the ORDER markers appear in the
+        // response, not by the digit Gemini printed — its page-count can drift across a long
+        // multi-page PDF, especially right after a near-blank cover page.
+        const pdfMarkerCount = (segments.length - 1) / 2;
         for (let pg = 0; pg < totalPdfPages; pg++) {
             const targetPageNum = pg + 1;
-            const segmentIndex = segments.findIndex((val, sIdx) => sIdx % 2 === 1 && parseInt(val, 10) === targetPageNum);
-            let pageContent = segmentIndex !== -1 ? (segments[segmentIndex + 1] || "") : "[NO HANDWRITING DETECTED]";
+            let pageContent = pg < pdfMarkerCount ? (segments[2 * pg + 2] || "") : "[NO HANDWRITING DETECTED]";
             let sanitized = pageContent.trim().replace(/\[#P\s*:\s*\d+\s*,/gi, `[#P:${targetPageNum},`);
             // Strip '#' only when it appears inside LaTeX math delimiters \( ... \) or \[ ... \].
             // Outside math, '#' is valid (e.g. C#, #1, numbered lists) — do NOT touch it.
@@ -2790,11 +2793,6 @@ const phraseLoopRegex = /(?!\[#P:|\[PAGE|\[QLABEL|\[DIAGRAM|\[\/DIAGRAM|\[TABLE|
                 }
 
                 const transcript = parsedOcr.text;
-                // Diagnostic: count how many PAGE markers were found vs expected
-const foundPageMarkers = (transcript.match(/\[PAGE\s+\d+\]/gi) || []).length;
-if (foundPageMarkers < currentBatch.length) {
-    console.warn(`[OCR] MARKER MISMATCH: Expected ${currentBatch.length} [PAGE N] markers, found ${foundPageMarkers}. Pages ${i+1}-${endRange}. Gemini may have skipped markers.`);
-}
   // Auto-close any [DIAGRAM] block that swallowed a [PAGE N] marker
 const fixedTranscript = transcript.replace(
     /(\[DIAGRAM\][\s\S]*?)(\[PAGE\s+\d+\])/g,
@@ -2807,26 +2805,29 @@ const fullyFixedTranscript = fixedTranscript.replace(
 );
 const pageSplitter = /\[PAGE\s+(\d+)\]/gi;
 const segments = fullyFixedTranscript.split(pageSplitter);
+                // Number of [PAGE N] markers actually found, regardless of what digit Gemini
+                // printed. Gemini's own page-count can drift — especially right after a
+                // near-blank page (cover pages give it nothing to anchor a boundary on) —
+                // which previously caused one page's content to be mislabeled onto another
+                // page's slot, or dropped as "[NO HANDWRITING DETECTED]" when it wasn't.
+                // Rather than guess when markers are missing, fail this batch here so it falls
+                // through to the existing per-image recovery path below (one Gemini call per
+                // image in just this batch — cheap, since it only fires on the rare mismatch).
+                const markerCount = (segments.length - 1) / 2;
+                if (markerCount < currentBatch.length) {
+                    console.warn(`[OCR] MARKER MISMATCH: Expected ${currentBatch.length} [PAGE N] markers, found ${markerCount}. Pages ${i+1}-${endRange}. Falling back to per-image recovery.`);
+                    throw new Error("PAGE_MARKER_MISMATCH");
+                }
 
                 for (let idx = 0; idx < currentBatch.length; idx++) {
                     const absolutePageIndex = i + idx;
                     const targetPageNum = absolutePageIndex + 1;
 
-                    let pageContent = "";
-                    const segmentIndex = segments.findIndex((val, sIdx) => sIdx % 2 === 1 && parseInt(val, 10) === targetPageNum);
-
-                    if (segmentIndex !== -1) {
-                        pageContent = segments[segmentIndex + 1] || "";
-    } else if (segments[0] && segments[0].trim().length > 20) {
-    // Gemini returned content but forgot the [PAGE N] marker entirely
-    // For single-image batches or first page, use raw content rather than lose it
-    pageContent = idx === 0 ? segments[0] : "[NO HANDWRITING DETECTED]";
-    if (idx > 0) {
-        console.warn(`[OCR] Page ${targetPageNum} missing [PAGE] marker in batch. Content may be lost.`);
-    }
-} else {
-    pageContent = "[NO HANDWRITING DETECTED]";
-}
+                    // Assign content by the ORDER markers appear in the response, not by the
+                    // digit Gemini printed inside [PAGE N]. The batch's physical image order is
+                    // fixed and known ahead of time, so position is trustworthy even when
+                    // Gemini's printed page number isn't.
+                    const pageContent = segments[2 * idx + 2] || "";
 
                     let sanitizedChunkText = pageContent.trim().replace(/\[#P\s*:\s*\d+\s*,/gi, `[#P:${targetPageNum},`);
                     // Strip '#' only inside LaTeX math delimiters — same as PDF path above.
