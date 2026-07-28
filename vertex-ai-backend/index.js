@@ -2288,9 +2288,52 @@ const segments = normalizedTranscript.split(pageSplitter);
         // response, not by the digit Gemini printed — its page-count can drift across a long
         // multi-page PDF, especially right after a near-blank cover page.
         const pdfMarkerCount = (segments.length - 1) / 2;
+
+        // Pages with no corresponding marker at all (a true miss — Gemini never addressed
+        // them, unlike a page where it explicitly wrote "no handwriting"). Recover these
+        // individually by re-sending the same PDF and asking Gemini to focus on just that
+        // page. Only fires for the rare mismatching PDF, not on every job.
+        const recoveredPdfPages = {};
+        for (let pg = pdfMarkerCount; pg < totalPdfPages; pg++) {
+            const pageNum = pg + 1;
+            await db.collection('gradingQueue').doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
+            try {
+                const pdfRecoveryModel = vertex_ai.getGenerativeModel({
+                    model: 'gemini-2.5-flash',
+                    systemInstruction: { parts: [{ text: finalOcrInstruction }] }
+                });
+                const recResult = await pdfRecoveryModel.generateContent({
+                    contents: [{
+                        role: 'user',
+                        parts: [
+                            pdfPart,
+                            { text: `This PDF has ${totalPdfPages} pages. Transcribe ONLY page ${pageNum} — ignore every other page.\nCRITICAL: Output MUST start with: [PAGE ${pageNum}]\nIf page ${pageNum} has no handwriting, output exactly: [PAGE ${pageNum}]\\n[NO HANDWRITING DETECTED].\n\nRULE PRIORITY (highest to lowest):\n1. [TABLE] blocks for accounts (journal, ledger, BRS, capital accounts) — transcribe ALL rows, no truncation.\n2. [DIAGRAM] blocks — HARD LIMIT 1000 words.\n3. Right-margin / separate rough-work column — SKIP ENTIRELY per the LEGIBILITY-EXIT LAW.\n\nOutput PLAIN TEXT starting with the [PAGE ${pageNum}] header — DO NOT wrap in JSON, code fences, or quotes.` }
+                        ]
+                    }],
+                    generationConfig: {
+                        candidateCount: 1,
+                        seed: 42,
+                        temperature: 0,
+                        topP: 0.5,
+                        maxOutputTokens: 8000,
+                        thinkingConfig: { thinkingBudget: 0 }
+                    }
+                });
+                const recParts = recResult.response.candidates[0].content.parts;
+                const rawRec = ((recParts.find(p => p.text && !p.thought) || recParts[recParts.length - 1]).text || "").trim();
+                const recMatch = rawRec.match(/\[PAGE\s+\d+\]\s*([\s\S]*)/i);
+                recoveredPdfPages[pageNum] = (recMatch ? recMatch[1] : rawRec).trim() || "[NO HANDWRITING DETECTED]";
+            } catch (recErr) {
+                console.error(`[OCR] PDF page ${pageNum} recovery FAILED: ${recErr?.message || recErr}`);
+                recoveredPdfPages[pageNum] = "[RECOVERY FAILED — please review manually]";
+            }
+        }
+
         for (let pg = 0; pg < totalPdfPages; pg++) {
             const targetPageNum = pg + 1;
-            let pageContent = pg < pdfMarkerCount ? (segments[2 * pg + 2] || "") : "[NO HANDWRITING DETECTED]";
+            let pageContent = pg < pdfMarkerCount
+                ? (segments[2 * pg + 2] || "")
+                : (recoveredPdfPages[targetPageNum] || "[NO HANDWRITING DETECTED]");
             let sanitized = pageContent.trim().replace(/\[#P\s*:\s*\d+\s*,/gi, `[#P:${targetPageNum},`);
             // Strip '#' only when it appears inside LaTeX math delimiters \( ... \) or \[ ... \].
             // Outside math, '#' is valid (e.g. C#, #1, numbered lists) — do NOT touch it.
