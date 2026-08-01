@@ -7646,6 +7646,46 @@ const detailDoc = cleanUndefined({
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET HOMEWORK SUBMISSION REPORT — HTTP endpoint
+// POST: { submissionDocId: string, teacherUid: string }
+// The teacher app's client-side Firestore reads can't reach studentGradingResults
+// (scoped to the student who owns it), but the full per-question report — including
+// real answer images, one per question for self-graded homework — lives there, not
+// in the lightweight completedHomeworkSubmissions summary doc. This endpoint uses
+// admin privileges to fetch and merge both, bypassing that client-side restriction
+// (scoped to the requesting teacher's own homework via createdByTeacherUid).
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getHomeworkSubmissionReport = onRequest(
+    { timeoutSeconds: 30, memory: '256MiB', cors: true, region: 'us-central1' },
+    async (req, res) => {
+        if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+        try {
+            const { submissionDocId, teacherUid } = req.body;
+            if (!submissionDocId) return res.status(400).json({ error: 'submissionDocId required' });
+
+            const subSnap = await db.collection('completedHomeworkSubmissions').doc(submissionDocId).get();
+            if (!subSnap.exists) return res.status(404).json({ error: 'Submission not found' });
+
+            const submission = subSnap.data();
+            if (teacherUid && submission.createdByTeacherUid && submission.createdByTeacherUid !== teacherUid) {
+                return res.status(403).json({ error: 'Not authorized for this submission' });
+            }
+
+            let gradingResult = null;
+            if (submission.gradingJobId) {
+                const jobSnap = await db.collection('studentGradingResults').doc(submission.gradingJobId).get();
+                if (jobSnap.exists) gradingResult = jobSnap.data();
+            }
+
+            res.json({ submission, gradingResult });
+        } catch (err) {
+            console.error('[getHomeworkSubmissionReport] Error:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EXTRACT ASSESSMENT QUESTIONS — HTTP endpoint (Vertex AI)
 // POST: { images: [{mimeType, data}], prompt: string, continuationPrompt: string|null }
 // Streams raw text back
