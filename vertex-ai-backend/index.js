@@ -5358,6 +5358,16 @@ if (unmappedQuestions.length === 0) return { mappings: [] };
         qlabelPositions.push({ raw, normLabel, pos: qm.index, end: qm.index + qm[0].length });
     }
 
+    // Document-order index for every master ID. Needed because subpart siblings
+    // ("18. i)", "18. ii)", "18. iii)", "18. iv)") all share the SAME leading
+    // number — comparing by bare numeric root treats them as indistinguishable,
+    // so an unmapped "18. i)" would skip right past its own already-resolved
+    // siblings "18. ii)"/"18. iii)"/"18. iv)" (none of them is a "<" or ">" match
+    // against the same root) and reach all the way to the next unrelated
+    // question's boundary — inheriting a huge, wrong gap instead of the one
+    // line between its own siblings.
+    const masterOrder = new Map(masterIds.map((id, idx) => [normalizeForComparison(id), idx]));
+
     // Map each deterministically-resolved question to its QLABEL char position
     const resolvedPositions = [];
     deterministicMappings.forEach(m => {
@@ -5369,7 +5379,7 @@ if (unmappedQuestions.length === 0) return { mappings: [] };
             id: m.id,
             normId,
             pos: ql ? ql.pos : -1,
-            num: parseInt((normId.match(/(\d+)/) || [])[1] || '0')
+            order: masterOrder.has(normId) ? masterOrder.get(normId) : -1
         });
     });
     resolvedPositions.sort((a, b) => a.pos - b.pos);
@@ -5377,14 +5387,16 @@ if (unmappedQuestions.length === 0) return { mappings: [] };
     const mappings = [];
 
     unmappedQuestions.forEach(uq => {
-        const uqNum = parseInt((normalizeForComparison(uq.questionNumber).match(/(\d+)/) || [])[1] || '0');
-        if (!uqNum) return;
+        const normUq = normalizeForComparison(uq.questionNumber);
+        const uqOrder = masterOrder.has(normUq) ? masterOrder.get(normUq) : -1;
+        if (uqOrder < 0) return;
 
-        // Find the resolved questions immediately before and after this unmapped question by number
-        const before = resolvedPositions.filter(r => r.num < uqNum && r.pos >= 0)
-            .sort((a, b) => b.num - a.num)[0];
-        const after = resolvedPositions.filter(r => r.num > uqNum && r.pos >= 0)
-            .sort((a, b) => a.num - b.num)[0];
+        // Find the resolved questions immediately before and after this unmapped
+        // question by document order (not bare numeric root — see comment above).
+        const before = resolvedPositions.filter(r => r.order >= 0 && r.order < uqOrder && r.pos >= 0)
+            .sort((a, b) => b.order - a.order)[0];
+        const after = resolvedPositions.filter(r => r.order >= 0 && r.order > uqOrder && r.pos >= 0)
+            .sort((a, b) => a.order - b.order)[0];
 
         const gapStart = before ? before.pos + 1 : 0;
         const gapEnd = after ? after.pos : fullTranscript.length;
@@ -6489,10 +6501,16 @@ if (ownMapping && ownMapping._gapText) {
 
                     if (!effectiveText) return; // truly nothing to share
 
-                    // Copy full family text to ALL members (so grader sees full context)
+                    // Only fill in members that are genuinely empty. A member that
+                    // already has its OWN resolved text (its own [QLABEL] was found)
+                    // must never be overwritten with the family blob — MCQ subparts
+                    // especially: each has a one-line answer, and blending siblings'
+                    // text together breaks the downstream deterministic letter
+                    // extractor for every subpart but the first one it matches.
     members.forEach(m => {
+        if ((m.studentText || '').trim().length > 0) return;
         m.studentText = effectiveText;
-        console.log(`[SubpartInherit] Set full family text for ${m.questionNumber}`);
+        console.log(`[SubpartInherit] Set family text for ${m.questionNumber} (was empty)`);
     });
                 });
             })(questions);
@@ -7091,6 +7109,15 @@ let _p0SucceededForSubpart = false;
             if (!studentLetter && !p0) {
                 const re2 = new RegExp(`\\(${subPart}\\)\\s*([A-Da-d])(?:[)\\s]|$)`, 'im');
                 p0 = rawOcr.match(re2);
+            }
+            // Fallback: bare "iv." / "iv)" subpart marker (no wrapping parens) — the
+            // real OCR format for a grouped MCQ block written as one list, e.g.
+            // "i. (c)  ii. (b)  iii. (d)  iv. (a)". re/re2 above only match "(iv)".
+            // Lookbehind/lookahead of non-roman-letters stops "i" matching inside
+            // "ii"/"iii"/"iv" (e.g. subPart="i" must not hit the tail of "iii)").
+            if (!studentLetter && !p0) {
+                const re3 = new RegExp(`(?:^|[\\s\\n])(?<![ivx])${subPart}(?![ivx])[).]+\\s*\\(?([A-Da-d])\\)?`, 'im');
+                p0 = rawOcr.match(re3);
             }
         } else {
             // Pattern 0-QLABEL (highest authority): anchor on THIS question's own
