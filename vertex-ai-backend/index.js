@@ -1525,6 +1525,19 @@ Before applying any rubric step, verify the student's answer is on the SAME TOPI
 - Do NOT try to force-fit a rubric step onto an off-topic answer. If step 1 of the rubric requires "definition of instantaneous velocity" and the student defined retardation instead, step 1 fails — 0 marks for that step, regardless of how well the student defined retardation.
 This law applies BEFORE any rubric matching. Rubric steps are only evaluated after topic match is confirmed.
 
+# LETTERED SUB-PART ALIGNMENT LAW (NON-NEGOTIABLE — for questions with a/b/c/d sub-parts, each mapped to its own rubric step)
+When a question's rubric has multiple steps, each naming a DIFFERENT lettered sub-part's expected concept (e.g. Step 1 = sub-part a, Step 2 = sub-part b, Step 3 = sub-part c, Step 4 = sub-part d), each step may ONLY be satisfied by what the student wrote under THAT SAME lettered sub-part — never by a matching keyword or concept that appears under a DIFFERENT sub-part.
+- Example failure to avoid: sub-part b) asks for "a stinging organ of jellyfish" (correct: Nematocyst) and the student wrote "Medusa" there (wrong). Sub-part c) asks for "free-floating form of Cnidaria" (correct: Medusa) and the student wrote "Ctenophora" there (wrong). Do NOT credit step c) just because the word "Medusa" appears somewhere in the student's answer — it was written under the WRONG sub-part (b), so it satisfies neither step. Step b) = 0 (wrong concept for that letter), step c) = 0 (wrong concept for that letter).
+- A concept only counts for a step if it appears under the sub-part that step is grading — scanning the whole answer block for a keyword and crediting whichever step mentions it is forbidden, exactly as vocabulary-overlap credit is forbidden under the OR-PAIR and TOPIC-MISMATCH laws above.
+- If the student's sub-part answers are already correctly ordered (a under a, b under b, etc.), this law changes nothing — grade normally.
+
+# LETTERED SIBLING MISLABEL LAW (for A/B diagram-pair questions where studentText contains a "[NOTE: ... only diagram found nearby is labeled for ...]" marker)
+This marker means the Librarian found NO diagram of this question's own, but a diagram exists under a sibling sub-question (e.g. this is 21.A but the only diagram nearby is labeled 21.B) — likely a student mislabel or OCR letter misread, not a genuinely missing answer.
+- Judge the diagram's ACTUAL subject against THIS question's own topic (from its text/model answer), not against the label it was found under.
+- If the diagram's content clearly matches THIS question's topic (e.g. this question asks for the male reproductive system and the diagram shows testes/vasa efferentia — male anatomy) → grade it normally against this question's rubric, as if it were correctly labeled.
+- If the diagram's content clearly matches the OTHER (sibling) question's topic instead → award 0 marks with feedback: "No diagram found for this part — the nearby diagram appears to belong to the other part."
+- Do not double-count: if you award marks here because the content matches this question, the sibling side should independently reach the same conclusion and award 0 for itself (it is being told the same fact from its own side).
+
 STRICT MODE ONLY, additional:
 - Wrong content deducts, even if rubric doesn't name that exact error.
 - Definitions need: term + meaning + one distinguishing feature.
@@ -6576,6 +6589,56 @@ if (ownMapping && ownMapping._gapText) {
                         console.log('[DiagramInherit] ' + q.questionNumber + ' inherited diagram from ' + sib.questionNumber);
                         break;
                     }
+                });
+            })(questions);
+
+            // ── LETTERED SIBLING MISLABEL CANDIDATE (A/B diagram pairs) ─────────────
+            // Problem: a two-part diagram question (e.g. 21.A = male reproductive
+            // system, 21.B = female reproductive system) is NOT an OR-pair — both
+            // parts are required, each expects its OWN diagram. If the student
+            // mislabels their diagram (or OCR misreads the letter), one side ends up
+            // completely empty ("not attempted") while the OTHER side holds content
+            // that may actually belong to the empty one. inheritSharedDiagrams above
+            // only walks BACKWARDS and assumes a genuinely-shared diagram — it can't
+            // recover this case (the empty side is usually the EARLIER one, the
+            // mislabeled content the LATER one).
+            //
+            // Fix: for a strict two-member ".A"/".B" family (excluding real OR-pairs,
+            // which are already handled via the OR-PAIR LAW) where exactly one side
+            // is completely empty and the other has a [DIAGRAM] block, hand the empty
+            // side a CANDIDATE copy of that diagram — clearly flagged as possibly
+            // mislabeled — and let the grading LLM's topic judgment (LETTERED SIBLING
+            // MISLABEL LAW) decide which side it actually belongs to. Never removes
+            // the diagram from its originally-labeled side; both may end up seeing it,
+            // exactly like OR-pairs already do.
+            (function flagLetteredDiagramMislabelCandidates(qs) {
+                const isOrPair = q => /alternative question \(or\)/i.test(q.checkingInstructions || '');
+
+                const pairs = new Map(); // numeric root -> [question, ...]
+                qs.forEach(q => {
+                    const norm = normalizeForComparison(q.questionNumber);
+                    const m = norm.match(/^(\d+)([ab])$/);
+                    if (!m) return;
+                    const root = m[1];
+                    if (!pairs.has(root)) pairs.set(root, []);
+                    pairs.get(root).push(q);
+                });
+
+                pairs.forEach(members => {
+                    if (members.length !== 2) return;                 // only clean A/B pairs
+                    if (members.some(isOrPair)) return;                // real OR-pairs handled elsewhere
+                    if (!members.every(m => m.imagePrompt)) return;    // both sides must expect a diagram
+
+                    const empty = members.find(m => (m.studentText || '').trim().length === 0);
+                    const other = members.find(m => m !== empty);
+                    if (!empty || !other) return;
+
+                    const diagramMatch = (other.studentText || '').match(/\[DIAGRAM\][\s\S]*?\[\/DIAGRAM\]/);
+                    if (!diagramMatch) return;
+
+                    empty.studentText = `[NOTE: This question has no diagram of its own in the transcript — the only diagram found nearby is labeled for ${other.questionNumber}. Check whether its CONTENT actually matches THIS question's own topic before deciding (the label may be a student mislabel or OCR letter misread). If the content matches this question's topic, grade it normally as this question's answer. If it clearly matches ${other.questionNumber}'s topic instead, this remains not attempted — award 0.]\n${diagramMatch[0]}`;
+                    empty.requiresReview = true;
+                    console.log(`[LetteredMislabel] ${empty.questionNumber}: flagged candidate diagram from ${other.questionNumber} for grading-time topic check`);
                 });
             })(questions);
 
