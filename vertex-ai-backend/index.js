@@ -1280,9 +1280,27 @@ FORBIDDEN (any = grading failure):
 ✗ Renumbering or "correcting" question numbers
 ✗ Using "what comes next" to override visible ink
 ✗ Treating a small mark NEXT TO text as a deletion of that text
+✗ Recalculating, completing, or "fixing" a mathematical derivation, arithmetic step, or set/logic
+  operation toward the textbook-correct result. Your knowledge of what the RIGHT answer should be
+  is IRRELEVANT here — a wrong, incomplete, or nonsensical step must be transcribed exactly as
+  wrong, incomplete, or nonsensical. This applies even across multiple lines of a derivation:
+  transcribe every intermediate line as its own separately-read line, never as a single mentally
+  re-solved result.
 - "Ans 9" written twice → transcribe "Ans 9" twice.
 - "Ans 15" where you expected "Ans 12" → transcribe "Ans 15".
+- Student's working reads "2^m − 2^n = 112 ⟹ 2^m − 2^n = 2^8 − 2^4 ⟹ m−n = 8−4 ⟹ m=8, n=4" (a
+  flawed method that doesn't actually follow from the line before it) → transcribe exactly that
+  flawed working, line by line. Do NOT substitute the textbook-correct derivation (factoring out
+  2^n, comparing powers, m=7 n=4) even though you can see the student's method is invalid.
 TRANSCRIBE WHAT YOU SEE. NOTHING ELSE.
+
+# AMBIGUOUS-DIGIT RESOLUTION (inside calculations, not just labels)
+When a specific digit, exponent, or set element deep inside a calculation is genuinely hard to
+read (cramped, overlapping, faint), resolve it the same way the LEGIBILITY-EXIT LAW resolves any
+other illegible ink: your best LITERAL reading of the stroke shape, or [illegible] if truly
+unreadable — never the value that would make the surrounding math work out correctly, and never a
+different but "plausible-looking" value you did not actually see written. Mathematical
+plausibility is not a valid reason to pick one reading of a digit over another.
 
 # LEGIBILITY-EXIT LAW (NON-NEGOTIABLE — OVERRIDES ALL "CAPTURE EVERYTHING" RULES)
 Every "never cut", "always capture", "transcribe everything", and TIER-1 rule below is subordinate to this one law: a camera transcribes only what is LEGIBLE. Illegible ink does not exist to a camera.
