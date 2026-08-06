@@ -3628,13 +3628,19 @@ checkingInstructions: q.checkingInstructions || "",
             text: `STUDENT_TRANSCRIPT:\n${ocrText}\n\nQUESTIONS_TO_GRADE (Pre-Mapped):\n${JSON.stringify(aiBatch)}`
         };
 
-        // Only pass diagram images to complex batch (MCQs never have diagrams)
-// Pass images for: (a) thinking-enabled batches, OR (b) any STEM batch with 3+ mark questions
+        // Pass images for: (a) thinking-enabled batches, (b) any STEM batch with 3+ mark
+        // questions, OR (c) any batch containing an SA/LA derivation question — the last
+        // one is unconditional on subject/marks because the transcript-cross-check use
+        // case (see collection loop above) applies regardless of subject, and the image
+        // token cost is negligible (~$0.00008/image at current Flash pricing).
+        const hasDerivationQuestion = batch.some(q => q.type === 'SA' || q.type === 'LA');
         const batchNeedsImages = diagramImageParts.length > 0 &&
-            (useThinking || (isSTEMSubject && batch.some(q => q.marks >= 3)));
+            (useThinking || (isSTEMSubject && batch.some(q => q.marks >= 3)) || hasDerivationQuestion);
         const parts = batchNeedsImages
             ? [
-                { text: `DIAGRAM REFERENCE IMAGES: ${diagramImageParts.length} page image(s). Use to visually verify student diagrams, force configurations, and charge setups. A diagram visible in the image but missing or incomplete in OCR is still a valid student attempt.` },
+                { text: `PAGE IMAGES: ${diagramImageParts.length} page image(s) — the ACTUAL handwritten page(s) these answers were found on. Two uses:
+1. DIAGRAMS: visually verify student diagrams, force configurations, and charge setups. A diagram visible in the image but missing or incomplete in OCR is still a valid student attempt.
+2. TRANSCRIPT CROSS-CHECK (derivation/working questions): the OCR transcript is a machine reading of this same page and can occasionally rewrite an ambiguous or wrong derivation into a mathematically "cleaner" one than what was actually written. Before grading any multi-step derivation or working, glance at the actual handwritten steps and final/boxed line in the image. If what you see in the image DISAGREES with the transcript's working or final answer, trust the IMAGE — grade based on what is ACTUALLY written there, not the transcript — and set requiresReview:true so a teacher double-checks it. If the image and transcript agree, grade normally with no extra flag.` },
                 ...diagramImageParts,
                 textPart
               ]
@@ -6778,15 +6784,27 @@ for (const q of questions) {
                     statusDetails: `Grading Questions ${batch[0].questionNumber} to ${batch[batch.length - 1].questionNumber}`
                 });
 
-                // T1-2: Collect original page images for any diagram questions in this batch.
-                // imagePrompt != null means the question expects a student-drawn diagram.
+                // T1-2: Collect original page images for (a) diagram questions and
+                // (b) SA/LA derivation questions in this batch.
+                //   - imagePrompt != null: question expects a student-drawn diagram — used
+                //     to visually verify the diagram itself.
+                //   - type SA/LA: multi-step derivation/working questions. OCR is a vision-LLM
+                //     transcribing handwriting, and under ambiguity it can silently rewrite a
+                //     wrong or non-standard derivation into the mathematically "clean" one
+                //     (observed directly: a wrong final answer transcribed as the textbook-
+                //     correct one). The grader gets the actual page so it can cross-check the
+                //     transcript's working/final line against what is really written, instead
+                //     of blindly trusting a transcript that may have been silently corrected.
                 // We find the page numbers those questions were answered on (from pageMap),
-                // then pass those specific page images to the grader so it can visually verify
-                // the diagram. Only fires when diagrams exist — zero cost for text-only batches.
+                // then pass those specific page images to the grader. Cost is a real image-
+                // token cost per page (roughly $0.00008/image at current Flash pricing) —
+                // negligible per paper, so this is not narrowly gated to STEM/high-mark
+                // questions the way the diagram-only path historically was.
                 const diagramImageParts = [];
                 const seenDiagramPages = new Set();
                 for (const q of batch) {
-                    if (!q.imagePrompt) continue; // not a diagram question, skip
+                    const needsPageImage = !!q.imagePrompt || q.type === 'SA' || q.type === 'LA';
+                    if (!needsPageImage) continue;
       const pagesForQ = pageMap.get(q._uid) || new Set();
                     for (const pgNum of pagesForQ) {
                         if (seenDiagramPages.has(pgNum)) continue; // already added this page
