@@ -1286,12 +1286,32 @@ FORBIDDEN (any = grading failure):
   wrong, incomplete, or nonsensical. This applies even across multiple lines of a derivation:
   transcribe every intermediate line as its own separately-read line, never as a single mentally
   re-solved result.
+✗ Adding, removing, or altering an element of a written set/list because a different count or
+  value would look more "complete," more "textbook-standard," or more internally consistent.
+✗ Substituting a digit inside a calculation with a DIFFERENT digit that matches a nearby label
+  or subscript, instead of the digit actually inked on the page.
+✗ Transcribing the SAME set or expression differently in two places within one answer just
+  because it is written twice (e.g. once as a "Given", again later restating it under a
+  different name). If it is the same handwritten content, it gets the same transcription both
+  times — go back and re-read the specific line in question, do not silently harmonize one
+  occurrence to the other or to what you'd expect.
 - "Ans 9" written twice → transcribe "Ans 9" twice.
 - "Ans 15" where you expected "Ans 12" → transcribe "Ans 15".
 - Student's working reads "2^m − 2^n = 112 ⟹ 2^m − 2^n = 2^8 − 2^4 ⟹ m−n = 8−4 ⟹ m=8, n=4" (a
   flawed method that doesn't actually follow from the line before it) → transcribe exactly that
   flawed working, line by line. Do NOT substitute the textbook-correct derivation (factoring out
   2^n, comparing powers, m=7 n=4) even though you can see the student's method is invalid.
+- Student writes the 4 subsets of a 2-element set as "φ, {φ}, {2}, {φ,2}" → transcribe exactly
+  those 4 items. Do NOT add a 5th item like "{1}" that is not on the page, even if a different
+  count "looks more standard" for a subset-listing problem.
+- Student writes "n=2, x = (4−1)/(4+1) = 3/5" and "n=3, x = (9−1)/(9+1) = 8/10 = 4/5" — the
+  numerator/denominator use 4 and 9 (squares of 2 and 3), not the bare label numbers 2 and 3.
+  Transcribe "4" and "9" exactly as written. Do NOT "simplify" them down to match the n= label
+  (i.e. do NOT write "(2−1)/(2+1) = 1/3" — that digit was never on the page).
+- Student writes "B = {1,9,9,16,25}" as a Given, then later writes "Codomain = {1,9,9,16,25}"
+  restating the same set — if that is what both lines actually show, both must transcribe
+  identically. Do NOT quietly change one occurrence to "{1,4,9,16,25}" because that looks like
+  the more standard set of perfect squares; read the actual ink on that specific line.
 TRANSCRIBE WHAT YOU SEE. NOTHING ELSE.
 
 # AMBIGUOUS-DIGIT RESOLUTION (inside calculations, not just labels)
@@ -7366,6 +7386,31 @@ if (_hasCorrectedTag) {
     }
 }
 
+// UNTAGGED MULTI-LETTER CORRECTION FALLBACK: a crossed-out-then-rewritten MCQ
+// answer sometimes leaves BOTH the voided first attempt and the real final
+// answer in the transcript with no [CORRECTED] tag — OCR can miss a strikethrough
+// over a full option's worth of text (a long scribble is harder to read as fully
+// cancelled than a single struck letter). Without the tag, Patterns 0-4 above grab
+// whichever letter comes FIRST — exactly the struck-out attempt.
+// Detect this independently of whether OCR tagged it: scan for genuine option-
+// letter markers ("d)", "b)" — the negative lookbehind excludes "(A)"/"(R)"
+// Assertion/Reason labels, which are NOT option markers despite also being single
+// letters in parens). If 2+ DISTINCT such letters appear with no [CORRECTED] tag,
+// trust the LAST one written — corrections come chronologically after mistakes,
+// the same assumption the [CORRECTED] mechanism already makes — and flag for
+// review so a teacher can verify either way.
+let _untaggedMultiLetter = false;
+if (!_hasCorrectedTag) {
+    const _letterMarkers = [...rawOcr.matchAll(/(?<!\()\b([A-Da-d])\)/g)].map(m => m[1].toUpperCase());
+    const _distinctLetters = [...new Set(_letterMarkers)];
+    if (_distinctLetters.length >= 2) {
+        const _lastLetter = _letterMarkers[_letterMarkers.length - 1];
+        console.log(`[MCQ UntaggedCorrection] Q${qr.questionNumber}: multiple distinct letters found (${_distinctLetters.join(',')}) with no [CORRECTED] tag — using last-written "${_lastLetter}", flagging for review`);
+        studentLetter = _lastLetter;
+        _untaggedMultiLetter = true;
+    }
+}
+
 // Shared-text subpart guard:
 // When both Q1(i) and Q1(ii) share the same inherited text block, the patterns
 // above may extract the wrong letter (e.g. picks option "(i)" text as the answer).
@@ -7478,8 +7523,10 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                                 ? `${studentLetter} - Good work.`
                                 : `Correct — your written answer matches option ${modelLetter}. Good work.`)
                             : `${studentLetter} - Incorrect. Correct answer: ${modelLetter}.`;
-                        // Flag letter/text mismatches for a teacher glance (letter disagreed but text matched).
-                        const _needsReview = _hasCorrectedTag || (_textCorrect && !_letterCorrect);
+                        // Flag letter/text mismatches for a teacher glance (letter disagreed but text matched),
+                        // plus untagged multi-letter corrections (see fallback above) — both are cases where
+                        // the deterministic letter choice is a best-effort guess, not a certain reading.
+                        const _needsReview = _hasCorrectedTag || _untaggedMultiLetter || (_textCorrect && !_letterCorrect);
                         console.log(`[MCQ Override] Q${qr.questionNumber}: letterCorrect=${_letterCorrect} textCorrect=${_textCorrect} student="${studentLetter}" model="${modelLetter}" overrideMarks=${overrideMarks} maxMarks=${maxMarks}`);
 const syncedSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
                             ...step,
