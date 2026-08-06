@@ -7310,11 +7310,34 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                     // text from the model answer and rely on the token rules above (no distractor list).
                     let _textCorrect = false;
                     {
+                        // Mathematically-significant operators are converted to NAMED tokens instead
+                        // of being stripped as noise. Two real failure modes this fixes:
+                        //  1. Set-theory options are often distinguished ONLY by which operator
+                        //     connects the same one/two variable names ("A-B=A-B'" vs "A-(A∩B)" vs
+                        //     "(A∪B)-B") — stripping -, ∩, ∪, ' left EVERY option collapsing to the
+                        //     same bare "a b", making them indistinguishable from each other AND too
+                        //     short to pass the length guard below even for a genuinely exact match
+                        //     (observed: a student who wrote the correct option's exact formula was
+                        //     scored 0 because "a b a b" is only 4 characters).
+                        //  2. Sign-only distinctions ("b=-3" vs "b=+3") vanished entirely once the
+                        //     sign was stripped — a genuinely WRONG answer (flipped sign, e.g. an
+                        //     OCR misread of the sign) could then silently equal the correct option's
+                        //     tokens and be wrongly credited. Keeping +/- as distinct named tokens
+                        //     closes this false-positive risk without touching the letter-match path.
                         const _tok = s => String(s || '')
                             .replace(/\\text\s*\{([^}]*)\}/gi, ' $1 ')
                             .replace(/\\(?:left|right|displaystyle|mathrm|mathbf|hat|vec|bar|frac|sqrt)\b/gi, ' ')
                             .replace(/\\([a-zA-Z]+)/g, '$1')      // \pi->pi (kept attached: "2\pi"->"2pi")
                             .toLowerCase()
+                            .replace(/−/g, '-').replace(/[’′]/g, "'")  // normalize unicode variants first
+                            .replace(/-/g, ' minus ')
+                            .replace(/\+/g, ' plus ')
+                            .replace(/∩/g, ' cap ')
+                            .replace(/∪/g, ' cup ')
+                            .replace(/'/g, ' prime ')
+                            .replace(/⊆/g, ' subseteq ').replace(/⊂/g, ' subset ')
+                            .replace(/≤/g, ' le ').replace(/≥/g, ' ge ')
+                            .replace(/≠/g, ' neq ')
                             .replace(/[^a-z0-9]+/g, ' ')
                             .trim().split(/\s+/).filter(Boolean);
                         const _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
