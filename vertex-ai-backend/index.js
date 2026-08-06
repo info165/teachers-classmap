@@ -1489,6 +1489,24 @@ Expressed = shown cause, effect, mechanism, definition, or reasoning.
 Keyword alone, no support = does not satisfy step.
 Accept any wording, any method, if understanding is real.
 
+## SUPERSEDED-STATEMENT LAW (self-correction robustness)
+Students sometimes write a value, cross it out, and continue their solution with a corrected
+value — but OCR transcription can miss a small or ambiguous cancellation mark and pass the
+crossed-out value through as if it were kept. Symptom: an early stated value (e.g. "A = {0,1,2}")
+does not match the value the student actually uses in every subsequent step (e.g. all later work
+uses A = {0,1}, and the final answer is complete and correct for A = {0,1}).
+Rule: judge the student's work by the value they ACTUALLY, CONSISTENTLY used in their applied
+steps and final answer — not by an earlier isolated statement that contradicts everything after
+it. If the later work is internally consistent and matches what a correct solution built on that
+value would produce, award full credit for those steps. Do NOT treat the mismatch between the
+early statement and the later correct work as an error to penalize, and do NOT count it twice (once
+as "wrong initial value", once as "final answer inconsistent/incomplete") — that is double-penalizing
+a single likely OCR artifact, not two separate mistakes.
+This does not license ignoring a genuine error: if the student's later work is ITSELF wrong,
+incomplete, or inconsistent with a value they used only sometimes (not consistently), grade that
+on its own merits as normal. This law only protects a student whose actual applied work is
+complete, consistent, and correct, from being penalized for a superseded earlier statement.
+
 ## RESULT-STEP LAW (final-answer steps)
 A rubric step that requires a specific FINAL ANSWER, final value, final expression, or numeric RESULT (e.g. "Correct final answer: 2%", "final expression v = k√(as)", "final percentage error") is a RESULT step. Award a RESULT step ONLY when the student's final value/expression MATCHES the model's (equivalent forms, units, and reasonable rounding are fine). If the student's final number/expression is WRONG, that RESULT step = 0 — even if the working looks partly right, and even if an earlier method step was satisfied.
 This law is SCOPED to result/final steps only. It does NOT change SETUP / METHOD / DERIVATION steps: grade each of those independently on its own merit — a correct setup still earns its step even when the final answer is wrong, and a wrong final must NEVER drag down a correctly-earned earlier step. Do not become harsher on method steps because of this rule; only withhold the final-result step when the final is actually wrong.
