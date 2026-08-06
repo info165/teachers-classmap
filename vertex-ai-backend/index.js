@@ -1753,6 +1753,11 @@ If student wrote nothing, or no text detected:
 - comment = "Not attempted" or "Not detected".
 - Use END tag for coordinates.
 Applies only when truly nothing written.
+This blank-answer rule applies to EVERY question type, including MCQ, AR, and
+True/False — the "does NOT apply to MCQ/AR/True-False" scoping above is only about
+the LONG-COMMENT negative-marker FORMAT, not about this exception. A blank MCQ/AR/
+True-False answer is 0, always — never infer or guess which option the student
+"probably meant" to select from a blank or undetected response.
 
 
 POSITIVE MARKERS:
@@ -3638,10 +3643,11 @@ checkingInstructions: q.checkingInstructions || "",
             (useThinking || (isSTEMSubject && batch.some(q => q.marks >= 3)) || hasDerivationQuestion);
         const parts = batchNeedsImages
             ? [
-                { text: `PAGE IMAGES: ${diagramImageParts.length} page image(s) — the ACTUAL handwritten page(s) these answers were found on. Two uses:
+                { text: `PAGE IMAGES: ${diagramImageParts.length} page image(s) below, each preceded by its own "Page N (handwritten):" label — the ACTUAL handwritten page(s) these answers were found on. Two uses:
 1. DIAGRAMS: visually verify student diagrams, force configurations, and charge setups. A diagram visible in the image but missing or incomplete in OCR is still a valid student attempt.
-2. TRANSCRIPT CROSS-CHECK (derivation/working questions): the OCR transcript is a machine reading of this same page and can occasionally rewrite an ambiguous or wrong derivation into a mathematically "cleaner" one than what was actually written. Before grading any multi-step derivation or working, glance at the actual handwritten steps and final/boxed line in the image. If what you see in the image DISAGREES with the transcript's working or final answer, trust the IMAGE — grade based on what is ACTUALLY written there, not the transcript — and set requiresReview:true so a teacher double-checks it. If the image and transcript agree, grade normally with no extra flag.` },
-                ...diagramImageParts,
+2. TRANSCRIPT CROSS-CHECK (derivation/working questions): the OCR transcript is a machine reading of this same page and can occasionally rewrite an ambiguous or wrong derivation into a mathematically "cleaner" one than what was actually written. Before grading any multi-step derivation or working, glance at the actual handwritten steps and final/boxed line in the image. If what you see in the image DISAGREES with the transcript's working or final answer, trust the IMAGE — grade based on what is ACTUALLY written there, not the transcript — and set requiresReview:true so a teacher double-checks it. If the image and transcript agree, grade normally with no extra flag.
+IMPORTANT — these images do NOT change how you determine pageIndex/stepPoint. Continue to read pageIndex and stepPoint ONLY from the [#P:page,y,x] tag at the end of each answer line in the transcript, exactly as always. These images are for visually checking WHAT was written, never for guessing WHICH page something is on — do not infer or override a page number from image order or position.` },
+                ...diagramImageParts.flatMap(({ pageNum, part }) => [{ text: `Page ${pageNum} (handwritten):` }, part]),
                 textPart
               ]
             : [textPart];
@@ -6811,7 +6817,10 @@ for (const q of questions) {
                         seenDiagramPages.add(pgNum);
                         const pageImagePart = imageParts[pgNum - 1]; // imageParts is 0-indexed
                         if (pageImagePart && !pageImagePart._pdfPagePlaceholder) {
-                            diagramImageParts.push(pageImagePart);
+                            // Tag each image with its real page number so the grader can never
+                            // confuse "which image is which page" with the [#P:page,y,x] tags in
+                            // the transcript — see the labeling + instruction at the call site.
+                            diagramImageParts.push({ pageNum: pgNum, part: pageImagePart });
                         }
                     }
                 }
@@ -7014,7 +7023,7 @@ questionWiseReport.push(...batchResult.map(qr => {
                         stepWiseEvaluation: (qr.stepWiseEvaluation || []).map(step => {
                             const rawPage = step.pageIndex;
                             // Use AI's pageIndex if valid (>=1), else last known page, else null
-                            const resolvedPage = (rawPage && rawPage >= 1)
+                            let resolvedPage = (rawPage && rawPage >= 1)
                                 ? rawPage
                                 : (fallbackPage !== null ? fallbackPage : null);
 
@@ -7035,7 +7044,11 @@ if (sp && coordBounds && coordBounds.byPage.size > 0) {
                                     });
                                     if (bestPage !== null) {
                                         console.log(`[CoordFix] Q${qr.questionNumber} page mismatch — corrected to page ${bestPage}, y kept at ${sp[0]}`);
-                                        // Only fix resolvedPage, not sp — y stays where grader put it
+                                        // Only fix resolvedPage, not sp — y stays where grader put it.
+                                        // (This assignment was previously missing — bestPage was computed
+                                        // and logged as "corrected" but never actually applied, so a
+                                        // grader-reported wrong page silently passed through uncorrected.)
+                                        resolvedPage = bestPage;
                                     }
                                 }
                                 // Y clamping removed — grader picks y from actual answer position;
@@ -7169,6 +7182,33 @@ const isMcqFormat = (qr.type === 'MCQ') || (qr.type === 'AR') ||
                         console.log('[MCQ Skip] Q' + qr.questionNumber + ': model answer "' + _modelRaw + '" has no A-D letter — skipping deterministic override');
                     } else {
 const rawOcr = (qr.studentText || qr.studentOcrAnswer || '');
+
+// BLANK-ANSWER GUARD (deterministic, code-level — not just a prompt instruction).
+// If nothing but structural OCR artifacts remain after stripping labels/tags/page
+// markers, the student did not write an answer here at all. Force 0 regardless of
+// what the initial LLM grading pass may have guessed — a blank slot must never be
+// scored as if a choice was made (observed directly: a genuinely blank MCQ/AR slot
+// was awarded full marks). This runs BEFORE any letter/textCorrect matching below,
+// so stray structural noise (an adjacent question's boundary label, a page marker)
+// can never coincidentally "match" a correct option and slip through. Threshold is
+// exactly zero characters remaining, not "very short" — a genuine minimal answer
+// (just the option letter, e.g. "b") must still pass through normally.
+const _strippedForBlankCheck = rawOcr
+    .replace(/\[QLABEL:[^\]]*\]/gi, '')
+    .replace(/\[#P:[^\]]*\]/gi, '')
+    .replace(/\[PAGE[^\]]*\]/gi, '')
+    .replace(/\bAns\.?\s*\d+[.):\s]*/gi, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .trim();
+if (_strippedForBlankCheck.length === 0) {
+    console.log(`[MCQ Blank] Q${qr.questionNumber}: no real content after stripping structural tags — forcing not-attempted (0 marks)`);
+    const blankSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
+        ...step,
+        marks: 0,
+        comment: i === 0 ? 'Not attempted' : (step.comment || '')
+    }));
+    return { ...qr, marksAwarded: 0, finalFeedback: 'Not attempted.', requiresReview: false, stepWiseEvaluation: blankSteps };
+}
 
 // [CORRECTED] = OCR marked a crossed-out-then-rewritten answer (see OCR CORRECTION
 // MARKER law). The surviving answer is whatever the student wrote AFTER the tag.
@@ -7360,6 +7400,17 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                         //     OCR misread of the sign) could then silently equal the correct option's
                         //     tokens and be wrongly credited. Keeping +/- as distinct named tokens
                         //     closes this false-positive risk without touching the letter-match path.
+                        //  3. BRACKET TYPE is equally significant and was missed by the original fix
+                        //     above — "R-{3,-2}" (remove two discrete points), "R-[3,-2]" (remove a
+                        //     closed interval), "R-(3,-2)" (remove an open interval) are three
+                        //     DIFFERENT answers that all collapsed to the same "r minus 3 minus 2"
+                        //     once {}/[] were stripped as noise, so a student's genuinely wrong
+                        //     bracket choice could silently match whichever option happened to be
+                        //     marked correct (observed directly: student wrote "[3,-2]", scored as
+                        //     if they'd written the correct "{3,-2}"). Round brackets are left as
+                        //     plain grouping (stripped) since they are ubiquitously used as pure
+                        //     grouping elsewhere (e.g. "(20/9)(i+2j+2k)") and are not, on their own,
+                        //     a set/interval notation the way {} and [] are.
                         const _tok = s => String(s || '')
                             .replace(/\\text\s*\{([^}]*)\}/gi, ' $1 ')
                             .replace(/\\(?:left|right|displaystyle|mathrm|mathbf|hat|vec|bar|frac|sqrt)\b/gi, ' ')
@@ -7374,6 +7425,8 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             .replace(/⊆/g, ' subseteq ').replace(/⊂/g, ' subset ')
                             .replace(/≤/g, ' le ').replace(/≥/g, ' ge ')
                             .replace(/≠/g, ' neq ')
+                            .replace(/\{/g, ' curlyopen ').replace(/\}/g, ' curlyclose ')
+                            .replace(/\[/g, ' squareopen ').replace(/\]/g, ' squareclose ')
                             .replace(/[^a-z0-9]+/g, ' ')
                             .trim().split(/\s+/).filter(Boolean);
                         const _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
