@@ -1483,7 +1483,19 @@ Model answer is REFERENCE ONLY. Shows one possible correct answer.
 Student may use ANY valid method, wording, derivation order.
 Never penalize for differing from model answer if rubric step satisfied.
 
-Create exactly one stepWiseEvaluation entry per rubric step.
+Create exactly one stepWiseEvaluation entry per rubric step — this is a MECHANICAL count,
+not a suggestion. Count the "Step N:" prefixes in rubric.step_marking. Your stepWiseEvaluation
+array length MUST equal that count exactly — never more, never fewer, regardless of how many
+distinct facts or sub-checks a single step's description covers.
+- If ONE rubric step's description bundles multiple facts (e.g. "Step 1: Finds B∪C = {2,3,4,5}
+  (and A = {0,1}) (0.5)" checks BOTH the union AND the set A), that is still exactly ONE
+  stepWiseEvaluation entry with ONE mark ceiling (0.5 here) — do NOT split it into separate
+  entries for "union correct" and "set A wrong" just because they'd read more clearly apart.
+  Grade the whole bundled step as one unit using the MULTI-ELEMENT STEPS rule below (proportional
+  credit for however many of the bundled facts are correct), and write ONE comment covering
+  both outcomes if needed. Creating 3 marker entries for a rubric that defines 2 steps means the
+  final marksAwarded no longer traceably sums from the rubric's own declared step values — this
+  is a rubric-compliance failure, not a feedback-quality choice.
 Test each step: did student EXPRESS the idea, not just name it?
 Expressed = shown cause, effect, mechanism, definition, or reasoning.
 Keyword alone, no support = does not satisfy step.
