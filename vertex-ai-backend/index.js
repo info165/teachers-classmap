@@ -7603,7 +7603,19 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             .replace(/≠/g, ' neq ')
                             .replace(/\{/g, ' curlyopen ').replace(/\}/g, ' curlyclose ')
                             .replace(/\[/g, ' squareopen ').replace(/\]/g, ' squareclose ')
-                            .replace(/[^a-z0-9]+/g, ' ')
+                            // GENERAL FIX (replaces a whack-a-mole pattern of naming one more
+                            // symbol every time a new false-positive is found — brackets, then
+                            // operators, now Greek letters/∅ hit the exact same bug): any symbol
+                            // not explicitly named above is now kept as its OWN token instead of
+                            // being silently deleted as "noise". Concretely: "P∩Q=φ" (correct)
+                            // used to collapse to "p cap q" once φ vanished — a trivial subsequence
+                            // that ANY answer mentioning P∩Q would match regardless of what's on
+                            // the other side of the equals sign, wrongly crediting a student who
+                            // picked the wrong option (wrote "P∩Q=P") as if they'd written the
+                            // correct one. Now φ, ∅, π, and any other un-named symbol survive as
+                            // their own distinguishing token, closing this class of bug generally
+                            // rather than one named exception at a time.
+                            .replace(/([^\sa-z0-9])/g, ' $1 ')
                             .trim().split(/\s+/).filter(Boolean);
                         const _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
                         const _need = _tok(_correctText);
