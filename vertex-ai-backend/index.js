@@ -2188,6 +2188,20 @@ const masterIds = jobData.questions.map(q => q.questionNumber);
     const HEAVY_SUBJECTS = ['physics', 'chemistry', 'biology', 'science', 'accounts', 'accountancy', 'maths', 'mathematics', 'commerce', 'economics', 'statistics'];
     const isHeavySubject = subject && HEAVY_SUBJECTS.some(s => subject.trim().toLowerCase().includes(s));
     const BATCH_SIZE = isHeavySubject ? 2 : 4;
+    // OCR model routing: dense math/science handwriting (nested exponents, fractions, set
+    // notation) has shown Flash silently fabricating content rather than transcribing it
+    // literally (confirmed directly against source images: wrong digits substituted, entire
+    // derivations invented from a misread base term). Pro is materially more capable at this
+    // specific failure mode. Reuses the existing isHeavySubject classification (same list
+    // already driving BATCH_SIZE above) rather than a second, potentially-drifting list.
+    // Text-heavy subjects (English, Social Science, etc.) stay on Flash — unaffected, no cost
+    // change there.
+    const ocrModelName = isHeavySubject ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    // Gemini 2.5 Pro cannot disable thinking (thinkingBudget must be >= 128; 0 is only valid
+    // on Flash and would error out every heavy-subject OCR call if left unconditional here).
+    // Use the minimum legal value for Pro — OCR is transcription, not reasoning, so there's no
+    // benefit to a larger budget, and thinking tokens bill at Pro's output rate ($10/M).
+    const ocrThinkingBudget = isHeavySubject ? 128 : 0;
 
     const validNums = jobData.questions.map(q => q.questionNumber).join(', ');
     const contextualRules = `\n# CONTEXTUAL AWARENESS:\nThe valid question numbers for this exam are: ${validNums}.\nIf a handwritten digit is ambiguous, prefer a number from this list.\n`;
@@ -2273,7 +2287,7 @@ const isPdfJob = imageParts.length > 0 && (
                     : "";
 
                 const pdfOcrModel = vertex_ai.getGenerativeModel({
-                    model: 'gemini-2.5-flash',
+                    model: ocrModelName,
                     systemInstruction: { parts: [{ text: finalOcrInstruction + refreshModifier }] }
                 });
 
@@ -2295,7 +2309,7 @@ temperature: 0,   // was 0.15 — matches the image OCR path; determinism > slig
                         topP: 0.5,
                         maxOutputTokens: 16000,
  // 30 pages of handwriting needs ~10k-20k tokens; 4096 truncates at page 3
-                        thinkingConfig: { thinkingBudget: 0 }
+                        thinkingConfig: { thinkingBudget: ocrThinkingBudget }
                     }
                 });
 
@@ -2335,7 +2349,7 @@ db.collection('apiUsageLogs').add({
     schoolName: jobData.schoolName || 'Unknown School',
     appType: 'teacher',
     feature: 'Assessment Checker OCR (Backend)',
-    modelCalled: 'gemini-2.5-flash',
+    modelCalled: ocrModelName,
     unitsConsumed: {
       imagesProcessed: totalPdfPages
     },
@@ -2385,7 +2399,7 @@ const segments = normalizedTranscript.split(pageSplitter);
             await db.collection('gradingQueue').doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
             try {
                 const pdfRecoveryModel = vertex_ai.getGenerativeModel({
-                    model: 'gemini-2.5-flash',
+                    model: ocrModelName,
                     systemInstruction: { parts: [{ text: finalOcrInstruction }] }
                 });
                 const recResult = await pdfRecoveryModel.generateContent({
@@ -2402,7 +2416,7 @@ const segments = normalizedTranscript.split(pageSplitter);
                         temperature: 0,
                         topP: 0.5,
                         maxOutputTokens: 8000,
-                        thinkingConfig: { thinkingBudget: 0 }
+                        thinkingConfig: { thinkingBudget: ocrThinkingBudget }
                     }
                 });
                 const recParts = recResult.response.candidates[0].content.parts;
@@ -2867,7 +2881,7 @@ let attempt = 0;
 const refreshModifier = "";
 
                 const ocrModel = vertex_ai.getGenerativeModel({
-                    model: 'gemini-2.5-flash',
+                    model: ocrModelName,
                     systemInstruction: { parts: [{ text: finalOcrInstruction + refreshModifier }] }
                 });
 
@@ -2887,7 +2901,7 @@ generationConfig: {
                         temperature: 0,
                         topP: 0.5,
                         maxOutputTokens: 16000,
-                        thinkingConfig: { thinkingBudget: 0 }
+                        thinkingConfig: { thinkingBudget: ocrThinkingBudget }
                     }
                 });
 
@@ -3424,7 +3438,7 @@ db.collection('apiUsageLogs').add({
     schoolName: jobData.schoolName || 'Unknown School',
     appType: 'teacher',
     feature: 'Assessment Checker OCR (Backend)',
-    modelCalled: 'gemini-2.5-flash',
+    modelCalled: ocrModelName,
     unitsConsumed: {
         imagesProcessed: currentBatch.length
     },
@@ -3450,7 +3464,7 @@ totalCostInr: (((usage.promptTokenCount - (usage.cachedContentTokenCount || 0)) 
 
                         try {
                             const recoveryModel = vertex_ai.getGenerativeModel({
-                                model: 'gemini-2.5-flash',
+                                model: ocrModelName,
                                 systemInstruction: { parts: [{ text: finalOcrInstruction }] }
                             });
 const recResult = await recoveryModel.generateContent({
@@ -3461,7 +3475,7 @@ generationConfig: {
                                     temperature: 0,
                                     topP: 0.5,
                                     maxOutputTokens: 24000,
-                                    thinkingConfig: { thinkingBudget: 0 }
+                                    thinkingConfig: { thinkingBudget: ocrThinkingBudget }
                                 }
                             });
                             const recParts = recResult.response.candidates[0].content.parts;
@@ -6784,6 +6798,78 @@ questions.forEach(q => {
 // OR-RESOLUTION happens inside the grader via OR-PAIR LAW (see GRADING_SYSTEM_INSTRUCTION).
             // Losing side hidden post-grading by computeOrLoserQNums() on the frontend.
 
+            // ─── OCR SELF-VERIFICATION PASS (SA/LA questions only) ──────────────────────
+            // The grading-time image cross-check (still in place below) asks ONE call to
+            // both re-verify a transcript against the image AND apply grading logic — in
+            // practice this does not reliably work: the model treats its own already-
+            // produced text transcript as authoritative and doesn't do the harder work of a
+            // genuinely fresh, careful re-read, even with the real image sitting right next
+            // to it (observed directly: a fabricated derivation graded as wrong when the
+            // actual handwriting was a complete, correct proof, in a grading call that very
+            // likely already included the page image). A narrow, single-purpose task is more
+            // reliable than the same instruction bundled into a bigger, multi-purpose one —
+            // so instead of asking the grader to also verify, run a small, focused, DEDICATED
+            // re-transcription pass for every SA/LA question before grading ever runs, using
+            // only that question's own page image and its own current transcript.
+            //
+            // Never silently prefers either reading. If the re-check confirms the original,
+            // nothing changes. If it disagrees, the corrected reading is used for grading (a
+            // narrow re-read of one region is more trustworthy than a first pass that had to
+            // process the whole multi-page paper at once) — but the question is unconditionally
+            // forced to requiresReview with both readings shown (see REPORT RECONSTRUCTION
+            // below), so a teacher makes the final call on any genuine disagreement. This can
+            // only add review flags, never silently swap a correct grade for a wrong one.
+            for (const q of questions) {
+                if (q.type !== 'SA' && q.type !== 'LA') continue;
+                if (!q.studentText || q.studentText.trim().length < 10) continue; // nothing to verify
+                const pagesForQ = pageMap.get(q._uid) || new Set();
+                const firstPage = Array.from(pagesForQ).sort((a, b) => a - b)[0];
+                if (!firstPage) continue;
+                const pageImagePart = imageParts[firstPage - 1]; // imageParts is 0-indexed
+                if (!pageImagePart || pageImagePart._pdfPagePlaceholder) continue;
+
+                try {
+                    const verifyModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+                    const verifyResult = await callGeminiWithRetry(verifyModel, {
+                        contents: [{
+                            role: 'user',
+                            parts: [
+                                pageImagePart,
+                                { text: `You are re-checking ONE specific answer on this page for transcription accuracy — nothing else on the page matters for this task.
+
+Question ${q.questionNumber}'s answer was previously transcribed as:
+"""
+${q.studentText.substring(0, 2000)}
+"""
+
+Look ONLY at the handwritten region on this page that answers Question ${q.questionNumber}. Character by character, digit by digit, symbol by symbol, does the transcription above EXACTLY match what is written? You are checking transcription accuracy only, like a proofreader checking a typed copy against a handwritten original — do NOT evaluate whether the answer is mathematically correct, do NOT fix a wrong derivation, do NOT recalculate anything.
+
+If the transcription exactly matches the ink, respond with exactly: SAME
+If it does NOT match, respond with ONLY the corrected transcription (same format — LaTeX for math, [#P:...] tags preserved where you can still identify them) — nothing else, no explanation, no preamble.` }
+                            ]
+                        }],
+                        generationConfig: {
+                            candidateCount: 1,
+                            seed: 42,
+                            temperature: 0,
+                            topP: 0,
+                            maxOutputTokens: 2000,
+                            thinkingConfig: { thinkingBudget: 0 }
+                        }
+                    });
+                    const verifyText = (verifyResult.response.candidates[0].content.parts[0].text || '').trim();
+                    if (verifyText && verifyText !== 'SAME' && verifyText.length > 5) {
+                        console.log(`[OCRVerify] Q${q.questionNumber}: verification pass disagrees with original transcript — will flag for review`);
+                        q._ocrVerificationOriginal = q.studentText;
+                        q.studentText = verifyText;
+                        q._ocrVerificationDisagreement = true;
+                    }
+                } catch (verifyErr) {
+                    console.warn(`[OCRVerify] Q${q.questionNumber}: verification call failed, keeping original transcript: ${verifyErr.message}`);
+                }
+            }
+            // ─── END OCR SELF-VERIFICATION PASS ──────────────────────────────────────────
+
             // ─── BATCH GRADING (UNCHANGED) ───────────────────────────────────────────
             const MAX_BATCH_WEIGHT = 16;
             const questionBatches = [];
@@ -7629,9 +7715,17 @@ const gradedResult = questionWiseReport.find(r => r._uid === originalQ._uid);
 
 if (gradedResult) {
                 const { studentText: _dropped, ...gradedClean } = gradedResult;
+                // OCR SELF-VERIFICATION DISAGREEMENT (see verification pass above): grading
+                // already ran on the corrected text, but a disagreement between two independent
+                // reads is ALWAYS surfaced for a human to resolve — never silently trusted either
+                // way, regardless of what the grader itself decided about requiresReview.
+                const _ocrDisagreementNote = originalQ._ocrVerificationDisagreement
+                    ? `\n\n[OCR VERIFICATION DISAGREEMENT — please check against the original answer sheet]\nOriginal OCR read: "${(originalQ._ocrVerificationOriginal || '').substring(0, 300)}"\nVerification re-read: "${(originalQ.studentText || '').substring(0, 300)}"`
+                    : '';
                 return {
                     ...gradedClean,
-                    requiresReview: gradedResult.requiresReview || !!originalQ._suspectedMislabel,
+                    requiresReview: gradedResult.requiresReview || !!originalQ._suspectedMislabel || !!originalQ._ocrVerificationDisagreement,
+                    finalFeedback: (gradedClean.finalFeedback || '') + _ocrDisagreementNote,
                         studentOcrAnswer: originalQ.studentText,
                         // FIX: never use || 0 — pageIndices[0] can legitimately BE 0 (page 1)
                         // and 0 || 0 = 0 which is correct by accident, but undefined || 0 = 0
