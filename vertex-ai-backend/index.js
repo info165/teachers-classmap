@@ -6829,6 +6829,14 @@ questions.forEach(q => {
                 if (!pageImagePart || pageImagePart._pdfPagePlaceholder) continue;
 
                 try {
+                    // Scale the output budget to the input length. A fixed 2000-token cap
+                    // truncated long multi-part answers mid-sentence (observed directly: a
+                    // long, CORRECT derivation got cut off after two lines, and the truncated
+                    // fragment was then wrongly accepted as a deliberate "correction",
+                    // replacing a good transcript with an incomplete one and dropping a
+                    // correct grade to 0). Also stop truncating the INPUT reference text —
+                    // a verification call can't confirm/correct what it was never shown.
+                    const verifyOutputBudget = Math.max(3000, Math.ceil(q.studentText.length / 2) + 1000);
                     const verifyModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
                     const verifyResult = await callGeminiWithRetry(verifyModel, {
                         contents: [{
@@ -6839,13 +6847,13 @@ questions.forEach(q => {
 
 Question ${q.questionNumber}'s answer was previously transcribed as:
 """
-${q.studentText.substring(0, 2000)}
+${q.studentText}
 """
 
 Look ONLY at the handwritten region on this page that answers Question ${q.questionNumber}. Character by character, digit by digit, symbol by symbol, does the transcription above EXACTLY match what is written? You are checking transcription accuracy only, like a proofreader checking a typed copy against a handwritten original — do NOT evaluate whether the answer is mathematically correct, do NOT fix a wrong derivation, do NOT recalculate anything.
 
 If the transcription exactly matches the ink, respond with exactly: SAME
-If it does NOT match, respond with ONLY the corrected transcription (same format — LaTeX for math, [#P:...] tags preserved where you can still identify them) — nothing else, no explanation, no preamble.` }
+If it does NOT match, respond with ONLY the FULL corrected transcription, start to finish — never a partial excerpt or just the part that changed (same format — LaTeX for math, [#P:...] tags preserved where you can still identify them) — nothing else, no explanation, no preamble.` }
                             ]
                         }],
                         generationConfig: {
@@ -6853,12 +6861,37 @@ If it does NOT match, respond with ONLY the corrected transcription (same format
                             seed: 42,
                             temperature: 0,
                             topP: 0,
-                            maxOutputTokens: 2000,
+                            maxOutputTokens: verifyOutputBudget,
                             thinkingConfig: { thinkingBudget: 0 }
                         }
                     });
-                    const verifyText = (verifyResult.response.candidates[0].content.parts[0].text || '').trim();
-                    if (verifyText && verifyText !== 'SAME' && verifyText.length > 5) {
+                    const verifyCandidate = verifyResult.response.candidates[0];
+                    const verifyFinishReason = verifyCandidate.finishReason;
+                    const verifyText = (verifyCandidate.content.parts[0].text || '').trim();
+                    // If the model's own response got cut off by the output limit, its
+                    // content is an unreliable partial fragment, not a real correction —
+                    // discard it and keep the original rather than trust an incomplete
+                    // answer that would otherwise look like "the student wrote less".
+                    // Tolerant confirmation check — an exact "SAME" match is too brittle if
+                    // the model adds trivial punctuation/wrapping despite instructions (e.g.
+                    // "SAME." or "The transcription is the same."). Treat any short response
+                    // whose content is essentially just the word "same" as a confirmation,
+                    // not a correction, so trivial formatting variance doesn't get mistaken
+                    // for a genuine disagreement (which is what was driving the near-100%
+                    // flag rate observed — most of that was truncation, but this closes the
+                    // other contributing gap).
+                    const isConfirmation = /^[^a-z]*same[^a-z]*$/i.test(verifyText) && verifyText.length < 20;
+                    // Defense in depth beyond the finishReason check: a "correction" that is
+                    // drastically shorter than a reasonably long original is far more likely
+                    // to be an incomplete re-transcription than a student who "actually wrote
+                    // less" — a real correction is usually comparable in length or longer
+                    // (fixing wrong content), rarely a fraction of the original.
+                    const suspiciouslyShort = q.studentText.length > 100 && verifyText.length < q.studentText.length * 0.3;
+                    if (verifyFinishReason === 'MAX_TOKENS') {
+                        console.warn(`[OCRVerify] Q${q.questionNumber}: verification response truncated (budget=${verifyOutputBudget}) — discarding, keeping original transcript`);
+                    } else if (suspiciouslyShort) {
+                        console.warn(`[OCRVerify] Q${q.questionNumber}: "correction" is ${verifyText.length} chars vs original ${q.studentText.length} chars — too short to trust, discarding, keeping original transcript`);
+                    } else if (verifyText && !isConfirmation && verifyText.length > 5) {
                         console.log(`[OCRVerify] Q${q.questionNumber}: verification pass disagrees with original transcript — will flag for review`);
                         q._ocrVerificationOriginal = q.studentText;
                         q.studentText = verifyText;
