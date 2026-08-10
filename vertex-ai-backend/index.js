@@ -8057,6 +8057,2358 @@ const detailDoc = cleanUndefined({
 );
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST TRIGGER: processGradingJobHindiTest
+//
+// Byte-for-byte mirror of processGradingJob above, except it listens on
+// gradingQueueHindiTest/{jobId} instead of gradingQueue/{jobId} (and its
+// internal progress-status writes target that same test collection). This
+// lets Hindi-language OCR/grading prompt work be tested end-to-end — real
+// job docs, real Firestore results — without ever touching the live
+// gradingQueue collection or the production processGradingJob function.
+//
+// Prompt logic is currently identical to English (no HINDI_OCR_ADDENDUM
+// wired in yet — that lands in a follow-up commit).
+// ─────────────────────────────────────────────────────────────────────────────
+exports.processGradingJobHindiTest = onDocumentCreated(
+   { document: "gradingQueueHindiTest/{jobId}", timeoutSeconds: 540, memory: "2GiB", region: "us-central1", concurrency: 1 },
+    async (event) => {
+        const snapshot = event.data;
+        if (!snapshot) return;
+        const jobId = event.params.jobId;
+        const jobData = snapshot.data();
+const {
+            teacherUid, studentUid, assessmentId, stream,
+            filePaths, answerSheetImageUrls,
+            questions, strictness, subject, totalMarks, board
+        } = jobData;
+        const hasSections = jobData.hasSections || false;
+
+
+
+
+        // Assign internal UIDs for collision-safe result matching (UNCHANGED)
+        questions.forEach((q, idx) => {
+            q._uid = `uid_${idx}_${Date.now()}`;
+        });
+
+const allRules = await fetchGradingRules(subject);
+        const bucket = storage.bucket();
+
+// ── SERIAL PROCESSING PER INSTANCE ──────────────────────────────────────
+        // concurrency:1 on the trigger guarantees only one job runs per instance
+        // at a time. Module-level vertex_ai (line 17) is now safe to reuse across
+        // jobs on the same warm instance — no shared-state race possible.
+        // 3s cooldown — ensures previous job's QPM usage clears before this job starts.
+        await sleep(3000);
+        // ────────────────────────────────────────────────────────────────────────
+
+        try {
+// REPLACE the current image fetch block (lines 4192-4215) with this:
+
+let imageParts;
+let hasSinglePdf = false;
+const urls = answerSheetImageUrls || [];
+const paths = filePaths || [];
+
+console.log(`[Job ${jobId}] filePaths=${paths.length} urls=${urls.length} source=${jobData.source}`);
+
+if (jobData.source === 'API' && urls.length > 0) {
+    // SaaS external path — unchanged
+    const rawParts = await fetchExternalImagesSecurely(urls);
+    imageParts = [];
+    for (const part of rawParts) {
+        if (part._isPdf) {
+            const pageCount = Number(jobData.pdfPageCount) || await detectPdfPageCount(part.inlineData.data);
+            const cleanPdfPart = { inlineData: part.inlineData };
+            for (let pg = 0; pg < pageCount; pg++) {
+                imageParts.push(pg === 0 ? cleanPdfPart : { _pdfPagePlaceholder: true });
+            }
+        } else {
+            imageParts.push(part);
+        }
+    }
+
+} else if (paths.length > 0) {
+    // Exam path: real GCS paths → Admin SDK (fast, no expiry)
+    hasSinglePdf = paths.length === 1 && paths[0].endsWith('.pdf');
+    if (hasSinglePdf) {
+        const [pdfBuffer] = await bucket.file(paths[0]).download();
+        const base64 = pdfBuffer.toString('base64');
+        const pageCount = Number(jobData.pdfPageCount) || detectPdfPageCount(base64);
+        const pdfPart = { inlineData: { mimeType: 'application/pdf', data: base64 } };
+        imageParts = Array.from({ length: pageCount }, (_, pg) =>
+            pg === 0 ? pdfPart : { _pdfPagePlaceholder: true }
+        );
+    } else {
+        imageParts = await Promise.all(paths.map(async (p) => {
+            const [buf] = await bucket.file(p).download();
+            const ext = p.split('.').pop()?.toLowerCase() || 'jpeg';
+            return { inlineData: { mimeType: ext === 'png' ? 'image/png' : 'image/jpeg', data: buf.toString('base64') } };
+        }));
+    }
+
+} else if (urls.length > 0) {
+    // ★ HOMEWORK PATH: no filePaths, but has Firebase Storage URLs
+    // Use Admin SDK to read directly from GCS — same as exam path, no token expiry
+    console.log(`[Job ${jobId}] Homework job — reading ${urls.length} images via Admin SDK (bypasses token expiry)`);
+    imageParts = await Promise.all(urls.map(async (url) => {
+        // Extract GCS path from Firebase Storage URL
+        let filePath = null;
+        if (url.includes('firebasestorage.googleapis.com')) {
+            const m = url.match(/\/o\/([^?]+)/);
+            if (m) filePath = decodeURIComponent(m[1]);
+        } else if (url.includes('storage.googleapis.com')) {
+            const m = url.match(/storage\.googleapis\.com\/[^/]+\/(.+)/);
+            if (m) filePath = decodeURIComponent(m[1]);
+        }
+        if (!filePath) throw new Error(`FETCH_FAIL: Cannot parse GCS path from URL: ${url.substring(0, 80)}`);
+
+        const [buf] = await bucket.file(filePath).download();
+        const ext = filePath.split('.').pop()?.toLowerCase() || 'jpeg';
+        return { inlineData: { mimeType: ext === 'png' ? 'image/png' : 'image/jpeg', data: buf.toString('base64') } };
+    }));
+
+} else {
+    throw new Error("NO_IMAGES: No filePaths or answerSheetImageUrls provided.");
+}
+
+if (!imageParts || imageParts.length === 0) {
+    throw new Error("NO_IMAGES: Image fetch returned empty array.");
+}
+
+            if (imageParts.length === 0) {
+                throw new Error("NO_IMAGES: No answer sheet images found for this job.");
+            }
+
+            // ─── OCR (UNCHANGED) ─────────────────────────────────────────────────────
+const pagesResult = await extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections);
+const masterIds = questions.map(q => q.questionNumber);
+const fullTranscript = stripCoverPageArtifacts(sanitizeQLabelTranscript(pagesResult.map(p => `[PAGE ${p.pageNum}]\n${p.text}`).join('\n\n'), masterIds));
+
+            const fullTranscriptClean = suppressOrphanQLabels(fullTranscript);
+
+
+            // ── SILENT OCR FAILURE DETECTION ──────────────────────────────────────────
+            // If OCR ran but returned empty for every page, the downstream librarian and
+            // grader will silently give 0 on everything — no error, no warning to teacher.
+            // Cause: rotated pages, very dark photos, Gemini refusing low-quality images,
+            // or OCR prompt mismatch. We detect this and fail fast with a clear message.
+            const nonEmptyPages = pagesResult.filter(p =>
+                p.text && p.text.trim().length > 10 && p.text !== '[NO HANDWRITING DETECTED]'
+            );
+            const ocrEmptyRatio = 1 - (nonEmptyPages.length / Math.max(pagesResult.length, 1));
+            if (ocrEmptyRatio > 0.8) {
+                // >80% of pages returned empty — this is a systemic OCR failure, not
+                // a student who left pages blank.
+                const emptyCount = pagesResult.length - nonEmptyPages.length;
+                console.error(`[OCR] SILENT FAILURE DETECTED: ${emptyCount}/${pagesResult.length} pages returned empty transcripts. Aborting grading.`);
+                await db.collection('gradingQueueHindiTest').doc(jobId).update({
+                    status: 'ERROR',
+                    statusDetails: `OCR could not read ${emptyCount} of ${pagesResult.length} pages. Possible causes: pages scanned upside down, very dark/blurry photos, or poor lighting. Please re-scan and resubmit.`,
+                    errorCode: 'OCR_EMPTY_FAILURE',
+                    progress: 0
+                });
+                return; // abort — do not continue to librarian/grader
+            }
+            // ─────────────────────────────────────────────────────────────────────────
+
+            await db.collection('gradingQueueHindiTest').doc(jobId).update({
+                statusDetails: `Structuring answers (AI Boundary Marking)...`,
+                currentStep: 2,
+                progress: 35
+            });
+
+            // ─── LIBRARIAN: Deterministic-First + LLM Rescue + LLM Fallback ─────────
+            // STAGE 1: Deterministic assignment — zero LLM cost.
+            //   Reads [QLABEL:text] markers emitted by OCR and assigns every
+            //   [#P:p,y,x] coordinate tag to a master question ID by position sweep.
+            //   Works for: MCQ (one tag per label), maths (label at top, work below),
+            //   prose (Ans 1(a) followed by orphan (b), (c)), deep nesting (1.(a).(i)).
+
+
+let deterministicMappings = [];
+let orphanTags = [];
+let unresolvedBoundaries = [];
+
+const result = deterministicBoundaryResolver(fullTranscript, masterIds, questions);
+
+deterministicMappings = result.mappings;
+orphanTags = result.orphanTags;
+unresolvedBoundaries = result.unresolvedBoundaries;
+
+            const deterministicCoverage = deterministicMappings.length;
+            console.log(`[Librarian] Deterministic: ${deterministicCoverage}/${masterIds.length} questions mapped. Orphan tags: ${orphanTags.length}. Unresolved boundaries: ${unresolvedBoundaries.length}`);
+
+            // STAGE 2: LLM Rescue — fires only when there are orphan tags or
+            //   unresolved boundary labels. Uses gemini-2.0-flash with a
+            //   tiny prompt (just orphan lines, not the full transcript).
+  let rescueMappings = { mappings: [] };
+            // Also fire rescue for questions deterministic completely missed (no QLABEL emitted at all)
+            const deterministicMappedIds = new Set(deterministicMappings.map(m => normalizeForComparison(m.id)));
+            const unmappedAfterDeterministic = questions.filter(q => !deterministicMappedIds.has(normalizeForComparison(q.questionNumber)));
+if (orphanTags.length > 0 || unresolvedBoundaries.length > 0 || unmappedAfterDeterministic.length > 0) {
+                console.log(`[Librarian] Escalating to rescue: ${orphanTags.length} orphan tags, ${unresolvedBoundaries.length} unresolved boundaries, ${unmappedAfterDeterministic.length} fully-missed questions`);
+
+if (unmappedAfterDeterministic.length > 0) {
+                    // BOUNDED EXCEPTION for sectioned papers: if an unmapped question
+                    // sits DIRECTLY between two already-resolved questions with
+                    // consecutive numbers, positional guess is safe even in a sectioned
+                    // paper — there's no ambiguity about which gap it is.
+                    const resolvedNums = new Set(
+                        deterministicMappings.map(m => parseInt((normalizeForComparison(m.id).match(/(\d+)/) || [])[1] || '0', 10))
+                    );
+                    const boundedSafeList = hasSections
+                        ? unmappedAfterDeterministic.filter(uq => {
+                            const n = parseInt((normalizeForComparison(uq.questionNumber).match(/(\d+)/) || [])[1] || '0', 10);
+                            return n > 0 && resolvedNums.has(n - 1) && resolvedNums.has(n + 1);
+                          })
+                        : unmappedAfterDeterministic;
+
+const gapMappings = gapSpanPositionalAssignment(
+                        fullTranscript, deterministicMappings,
+                        hasSections ? boundedSafeList : unmappedAfterDeterministic,
+                        masterIds,
+                        hasSections ? false : hasSections
+                    );
+                    if (gapMappings.mappings.length > 0) {
+                        console.log(`[GapSpan] Assigned ${gapMappings.mappings.length} questions via gap-span`);
+                        gapMappings.mappings.forEach(gm => {
+                            const existIdx = deterministicMappings.findIndex(m =>
+                                normalizeForComparison(m.id) === normalizeForComparison(gm.id));
+                            if (existIdx === -1) deterministicMappings.push(gm);
+                        });
+                        // Mark these as needing review
+                        gapMappings.mappings.forEach(gm => {
+                            const q = questions.find(q =>
+                                normalizeForComparison(q.questionNumber) === normalizeForComparison(gm.id));
+                            if (q) q._gapSpanAssigned = true;
+                        });
+                    }
+                }
+
+                // STAGE 2b: LLM rescue only for remaining orphan tags (misassigned, not missed)
+                const stillUnmapped = questions.filter(q =>
+                    !deterministicMappings.find(m =>
+                        normalizeForComparison(m.id) === normalizeForComparison(q.questionNumber)));
+if (orphanTags.length > 0 || unresolvedBoundaries.length > 0) {
+                    const resolvedContext = deterministicMappings.map(m => ({
+                        id: m.id,
+                        confidence: 'medium'
+                    }));
+                    rescueMappings = await librarianOrphanRescue(
+                        orphanTags, unresolvedBoundaries, fullTranscript, questions, stillUnmapped, resolvedContext
+                    );
+                }
+            }
+
+const coverageRatio = deterministicCoverage / Math.max(masterIds.length, 1);
+const rescueThreshold = hasSections ? 0.5 : 0.7;
+            let tagMapping;
+
+            // UPSC/ESSAY PROSE FALLBACK:
+            // Papers like UPSC, sociology essays have NO question labels written by student.
+            // Coverage will be 0% because there are no [QLABEL] tags to detect.
+            // In this case, assign pages sequentially to questions.
+            // Fires when: coverage < 10% AND ≤ 5 master questions (essay/long-answer paper).
+            if (coverageRatio < 0.1 && masterIds.length <= 5) {
+                console.log('[Librarian] Possible essay/UPSC paper (0 labels, few questions) — using sequential page assignment');
+                const sequentialMappings = [];
+                pagesResult.forEach((page, pageIdx) => {
+                    // Assign each page's tags to the corresponding question (or last question)
+                    const questionIdx = Math.min(pageIdx, masterIds.length - 1);
+                    const masterId = masterIds[questionIdx];
+                    const tags = (page.text.match(/\[#P:\d+,\d+,\d+\]/g) || []);
+                    if (tags.length > 0) {
+                        const existingIdx = sequentialMappings.findIndex(m => m.id === masterId);
+                        if (existingIdx !== -1) {
+                            sequentialMappings[existingIdx].tags = [
+                                ...new Set([...sequentialMappings[existingIdx].tags, ...tags])
+                            ];
+                        } else {
+                            sequentialMappings.push({ id: masterId, tags });
+                        }
+                    }
+                });
+tagMapping = { mappings: sequentialMappings };
+console.log(`[Librarian] Sequential assignment: ${sequentialMappings.length} questions mapped across ${pagesResult.length} pages`);
+            }
+else if (coverageRatio < rescueThreshold) {
+                // Merge deterministic + rescue before deciding to fall back.
+                // Rescue already ran above and may have recovered unmapped questions.
+                // Throwing rescue away and running full LLM is wasteful and unreliable
+                // on complex math/science papers. Only fall to full LLM if merged
+                // coverage is still critically low (< 30%).
+                const mergedForCoverage = [...deterministicMappings];
+                (rescueMappings?.mappings || []).forEach(rm => {
+                    const existingIdx = mergedForCoverage.findIndex(m =>
+                        normalizeForComparison(m.id) === normalizeForComparison(rm.id)
+                    );
+                    if (existingIdx !== -1) {
+                        mergedForCoverage[existingIdx].tags = [
+                            ...new Set([...mergedForCoverage[existingIdx].tags, ...rm.tags])
+                        ];
+                    } else {
+                        mergedForCoverage.push(rm);
+                    }
+                });
+                const mergedCoverage = mergedForCoverage.length / Math.max(masterIds.length, 1);
+                if (mergedCoverage < 0.3) {
+                    console.warn(`[Librarian] Merged coverage still low (${Math.round(mergedCoverage * 100)}%). Falling back to full LLM librarian.`);
+                    tagMapping = await librarianTagMapper(fullTranscript, questions, subject);
+                } else {
+                    console.log(`[Librarian] Rescue elevated coverage to ${Math.round(mergedCoverage * 100)}% — using merged result, skipping full LLM.`);
+                    tagMapping = { mappings: mergedForCoverage };
+                }
+            } else {
+                // Merge deterministic + rescue results
+                const mergedMappings = [...deterministicMappings];
+                (rescueMappings?.mappings || []).forEach(rm => {
+                    const existingIdx = mergedMappings.findIndex(m =>
+                        normalizeForComparison(m.id) === normalizeForComparison(rm.id)
+                    );
+                    if (existingIdx !== -1) {
+                        // Merge tags, deduplicate
+                        mergedMappings[existingIdx].tags = [
+                            ...new Set([...mergedMappings[existingIdx].tags, ...rm.tags])
+                        ];
+                    } else {
+                        mergedMappings.push(rm);
+                    }
+                });
+                tagMapping = { mappings: mergedMappings };
+
+                // ── FIX #5: SECOND-PASS ZERO-TAG RESCUE ──────────────────────────────
+                // After merging deterministic + first rescue, find questions that still
+                // have ZERO assigned tags. These are questions whose content was either:
+                //   a) Wrongly assigned to another question (Bug #1: "6A" → "6.(a)"), or
+                //   b) Genuinely not written by the student.
+                // We can't distinguish (a) from (b) deterministically, so we send the
+                // full transcript minus already-mapped lines to the rescue LLM with a
+                // targeted candidate list. Cost: cheap — only fires when gaps exist.
+                const mappedTagSet = new Set();
+                tagMapping.mappings.forEach(m => m.tags.forEach(t => mappedTagSet.add(t)));
+
+// Also rescue questions whose tags are all on wrong pages (stolen by stray QLABEL)
+const zeroTagQuestions = questions.filter(q => {
+    const key = normalizeForComparison(q.questionNumber);
+    const existing = tagMapping.mappings.find(m => normalizeForComparison(m.id) === key);
+    if (!existing || existing.tags.length === 0) return true;
+    // Check if ALL tags are on page 1-2 but question is in later half of paper
+    const qIdx = questions.indexOf(q);
+    const positionRatio = qIdx / Math.max(questions.length - 1, 1);
+    if (positionRatio > 0.5) {
+        const tagPages = existing.tags.map(t => {
+            const pm = t.match(/\[#P:(\d+),/);
+            return pm ? parseInt(pm[1], 10) : 0;
+        }).filter(p => p > 0);
+        if (tagPages.length > 0 && Math.max(...tagPages) <= 2) return true;
+    }
+    return false;
+});
+
+                if (zeroTagQuestions.length > 0) {
+                    console.log(`[Librarian] Second-pass rescue: ${zeroTagQuestions.length} questions have zero tags.`);
+
+// Build a mini-transcript of UNMAPPED lines only.
+                    // EXCEPTION: if zeroTagQuestions have zero tags (not stolen-page case),
+                    // the relevant lines ARE mapped (stolen by prior question). Send full transcript.
+                    const trueZeroTag = zeroTagQuestions.filter(q => {
+                        const key = normalizeForComparison(q.questionNumber);
+                        const existing = tagMapping.mappings.find(m => normalizeForComparison(m.id) === key);
+                        return !existing || existing.tags.length === 0;
+                    });
+                    const allLines = fullTranscript.split('\n');
+                    const unmappedLines = trueZeroTag.length > 0
+                        ? allLines // full transcript — tags are stolen, unmapped filter misses them
+                        : allLines.filter(line => {
+                            const tagMatch = line.match(/\[#P:\d+,\d+,\d+\]/);
+                            if (!tagMatch) return true;
+                            return !mappedTagSet.has(tagMatch[0]);
+                        });
+                    const unmappedTranscript = unmappedLines.join('\n');
+
+if (fullTranscript.trim().length > 20) {
+                        // Targeted rescue: sends FULL transcript + explicit corrupted-label instructions.
+                        // Old approach sent mini-transcript (unmapped lines only) — missed stolen tags.
+                        // New approach: LLM sees everything, knows to look for corrupted Ans labels.
+                        const zeroTagIds = zeroTagQuestions.map(q => ({
+                            id: q.questionNumber,
+                         anchors: (q.topicAnchors && q.topicAnchors.length > 0)
+    ? q.topicAnchors.slice(0, 4)
+    : [(q.text || '').substring(0, 120)],  // use more text when anchors missing
+                            hint: (q.text || '').substring(0, 80)
+                        }));
+
+                        const rescueModel = vertex_ai.getGenerativeModel({
+                            model: 'gemini-2.0-flash',
+                            generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+                        });
+
+                        const rescuePrompt = `You are a document librarian. These questions have NO student text assigned, but the student likely wrote answers — the answer labels may be misspelled or corrupted by OCR.
+
+MISSING QUESTIONS (find answers for ONLY these):
+${JSON.stringify(zeroTagIds, null, 2)}
+
+FULL TRANSCRIPT:
+${fullTranscript}
+
+YOUR TASK:
+Search the full transcript for any text that is the student's answer to each missing question.
+The student's label may be corrupted — e.g. "Anes10" instead of "Ans 10", "Ans1O" instead of "Ans 10", "Ans I3" instead of "Ans 13", or the label may be entirely absent.
+Use topicAnchors and hint to identify which block of text answers each question.
+Assign ALL [#P:p,y,x] coordinate tags from that block to the question ID.
+
+RULES:
+1. Only assign tags to questions in the MISSING QUESTIONS list.
+2. Each [#P] tag can only be assigned to ONE question.
+3. If you cannot find an answer for a question, omit it — do not guess.
+4. Look for answer text even when the label is absent or corrupted.
+
+Return ONLY valid JSON:
+{ "mappings": [{ "id": "question_id_exactly_as_listed", "tags": ["[#P:p,y,x]"] }] }`;
+
+                        try {
+                            const rescueResult = await callGeminiWithRetry(rescueModel, {
+                                contents: [{ role: 'user', parts: [{ text: rescuePrompt }] }]
+                            });
+                            const rawRescue = rescueResult.response.candidates[0].content.parts[0].text;
+                            const secondRescue = extractJsonFromString(rawRescue) || { mappings: [] };
+
+                            (secondRescue?.mappings || []).forEach(rm => {
+                                const existingIdx = tagMapping.mappings.findIndex(m =>
+                                    normalizeForComparison(m.id) === normalizeForComparison(rm.id)
+                                );
+                                if (existingIdx !== -1) {
+                                    tagMapping.mappings[existingIdx].tags = [
+                                        ...new Set([...tagMapping.mappings[existingIdx].tags, ...rm.tags])
+                                    ];
+                                } else {
+                                    tagMapping.mappings.push(rm);
+                                }
+                            });
+                        } catch (rescueErr) {
+                            console.warn(`[Librarian] Zero-tag rescue failed: ${rescueErr.message}`);
+                        }
+                    }
+                }
+                // ─────────────────────────────────────────────────────────────────────
+            }   // ── RESCUE SANITY FILTER ─────────────────────────────────────────────
+                // Problem: The rescue LLM sometimes assigns tags from page 1 (Q1-Q2 region)
+                // to questions like Q8/Q9 that live on pages 6-9. This causes Q8/Q9 to
+                // inherit Q2's text as their answer. 
+                // Fix: For each question, check if ANY of its assigned tags fall on a page
+                // that is far earlier than the question's expected page range.
+                // If ALL tags are on page 1 but the question appears on page 6+, reject them.
+                tagMapping.mappings.forEach(m => {
+                    const qObj = questions.find(q => normalizeForComparison(q.questionNumber) === normalizeForComparison(m.id));
+                    if (!qObj || !m.tags || m.tags.length === 0) return;
+
+                    // Find what page this question's [QLABEL] was found on (from deterministic pass)
+                    const detMapping = deterministicMappings.find(dm => normalizeForComparison(dm.id) === normalizeForComparison(m.id));
+                    if (detMapping && detMapping.tags.length > 0) return; // deterministic got it right — don't second-guess
+
+                    // Get pages of ALL assigned tags
+                    const tagPages = m.tags.map(t => {
+                        const pm = t.match(/\[#P:(\d+),/);
+                        return pm ? parseInt(pm[1], 10) : 0;
+                    }).filter(p => p > 0);
+
+                    if (tagPages.length === 0) return;
+
+                    const minTagPage = Math.min(...tagPages);
+                    const maxTagPage = Math.max(...tagPages);
+
+                    // Find the QLABEL for this question in the full transcript — its page is authoritative
+                    const qNorm = normalizeForComparison(m.id);
+                    const qlabelRx = /\[QLABEL:([^\]]+)\][\s\S]*?\[#P:(\d+),/g;
+                    let qLabelPage = 0;
+                    let qlm;
+                    while ((qlm = qlabelRx.exec(fullTranscript)) !== null) {
+                        if (normalizeForComparison(qlm[1]) === qNorm) {
+                            qLabelPage = parseInt(qlm[2], 10);
+                            break;
+                        }
+                    }
+
+  let effectiveQLabelPage = qLabelPage;
+if (effectiveQLabelPage === 0) {
+    const qIndex = questions.findIndex(q => normalizeForComparison(q.questionNumber) === normalizeForComparison(m.id));
+    if (qIndex > 0) {
+        // Estimate: earlier questions have lower page numbers
+        // Use the page of the nearest preceding question that DID get tags
+        for (let qi = qIndex - 1; qi >= 0; qi--) {
+            const prevQ = questions[qi];
+            const prevMapping = tagMapping.mappings.find(pm => normalizeForComparison(pm.id) === normalizeForComparison(prevQ.questionNumber));
+            if (prevMapping && prevMapping.tags.length > 0) {
+                const prevPages = prevMapping.tags.map(t => {
+                    const pm = t.match(/\[#P:(\d+),/);
+                    return pm ? parseInt(pm[1], 10) : 0;
+                }).filter(p => p > 0);
+                if (prevPages.length > 0) {
+                    effectiveQLabelPage = Math.max(...prevPages);
+                    break;
+                }
+            }
+        }
+    }
+}
+if (effectiveQLabelPage > 0 && maxTagPage < effectiveQLabelPage) {
+                        console.warn(`[SanityFilter] Rejecting rescue tags for ${m.id}: QLABEL on page ${qLabelPage} but tags on pages ${tagPages.join(',')} — likely wrong assignment`);
+                        m.tags = []; // clear — question will fall back to "No specific text assigned"
+                    }
+                });
+
+// AFTER — use _uid as key to survive duplicate question numbers:
+const pageMap = new Map();
+questions.forEach(q => pageMap.set(q._uid, new Set()));
+
+// Step 1: assign mapping by normKey — SHARED across duplicate-number questions.
+// Old code: first question "consumed" the entry, sibling got null.
+// New code: all questions with same normKey get the SAME mapping entry.
+// OR-winner logic (downstream) decides who keeps content, who gets wiped.
+const questionMappings = new Map(); // _uid -> mapping entry
+const mappingsByNormKey = new Map(); // normKey -> mapping entry (built once)
+const mappingsArr = tagMapping && tagMapping.mappings ? tagMapping.mappings : [];
+mappingsArr.forEach(m => {
+    const key = normalizeForComparison(m.id);
+    if (!mappingsByNormKey.has(key)) mappingsByNormKey.set(key, m);
+});
+questions.forEach(q => {
+    const normKey = normalizeForComparison(q.questionNumber);
+    questionMappings.set(q._uid, mappingsByNormKey.get(normKey) || null);
+});
+
+const atomicSlices = sliceByAtomicLines(fullTranscript, tagMapping);
+
+// TABLE ANSWER FALLBACK: Questions whose answer is entirely inside a [TABLE] block
+// have zero [#P:] tags — OCR doesn't emit coordinate tags inside table rows.
+// For these, slice the text directly between their QLABEL and the next QLABEL.
+questions.forEach(q => {
+    const qKey = normalizeForComparison(q.questionNumber);
+    const existing = tagMapping.mappings.find(m => normalizeForComparison(m.id) === qKey);
+    if (existing && existing.tags.length > 0) return; // already has tags, skip
+    if (atomicSlices[qKey] && atomicSlices[qKey].length > 10) return; // already sliced
+    // Find this question's QLABEL in the transcript
+    const qlRe = /\[QLABEL:([^\]]+)\]/g;
+    let prevQL = null, myQL = null, nextQL = null;
+    let m;
+    while ((m = qlRe.exec(fullTranscript)) !== null) {
+        const norm = normalizeForComparison(m[1]);
+        if (norm === qKey && !myQL) { myQL = m; continue; }
+        if (myQL) { nextQL = m; break; }
+        if (!myQL) prevQL = m; // track last QLABEL before ours
+    }
+    if (!myQL) return; // no QLABEL found at all
+    // FORWARD slice: from myQL to nextQL (normal case — TABLE after label)
+    const fwdStart = myQL.index;
+    const fwdEnd = nextQL ? nextQL.index : fullTranscript.length;
+    const fwdSlice = fullTranscript.substring(fwdStart, fwdEnd).trim();
+    if (fwdSlice.includes('[TABLE') && fwdSlice.length > 20) {
+        atomicSlices[qKey] = fwdSlice;
+        console.log(`[TableFallback] Q${q.questionNumber}: forward-sliced ${fwdSlice.length} chars (TABLE after label)`);
+        return;
+    }
+    // BACKWARD slice: from prevQL (or page boundary) to myQL
+    // Handles: OCR emits [TABLE]...[/TABLE] BEFORE the label in linearized output.
+    // Example: [TABLE: wrap text | Anchoring ...][/TABLE] Ans-10 [QLABEL:Ans-10]
+    const bwdStart = prevQL ? prevQL.index + prevQL[0].length : 0;
+    const bwdEnd = myQL.index + myQL[0].length; // include the QLABEL itself
+    const bwdSlice = fullTranscript.substring(bwdStart, bwdEnd).trim();
+    if (bwdSlice.includes('[TABLE') && bwdSlice.length > 20) {
+        // Combine: backward TABLE content + forward label text
+        const combined = bwdSlice + '\n' + fwdSlice;
+        atomicSlices[qKey] = combined;
+        console.log(`[TableFallback] Q${q.questionNumber}: backward-sliced ${bwdSlice.length} chars (TABLE before label)`);
+    }
+});
+
+// Helper: slice transcript for a specific set of tags.
+// Uses the same position-based logic as sliceByAtomicLines above.
+// Pre-build tag position map once (reused for all questions).
+const _allTagPos = [];
+{ const _tr = /\[#P:(\d+),(\d+),(\d+)\]/g; let _m;
+  while ((_m = _tr.exec(fullTranscript)) !== null)
+      _allTagPos.push({ tag: _m[0], pos: _m.index, end: _m.index + _m[0].length }); }
+const _tagPosMap = new Map();
+const _normTag = (s) => s.replace(/\s+/g, '').toLowerCase();
+_allTagPos.forEach(t => { _tagPosMap.set(t.tag, t); _tagPosMap.set(_normTag(t.tag), t); });
+
+function sliceFromTags(approvedTags, ownerQNum, masterIds, questionType) {
+    if (!approvedTags || approvedTags.length === 0) return '';
+    const positions = approvedTags
+         .map(t => _tagPosMap.get(t) || _tagPosMap.get(_normTag(t))).filter(Boolean)
+
+        .sort((a, b) => a.pos - b.pos);
+    if (positions.length === 0) return '';
+
+    const firstTagPos = positions[0].pos;
+    const qlRx = /\[QLABEL:([^\]]+)\]/g;
+    let lastQL = null; let qm;
+    while ((qm = qlRx.exec(fullTranscript)) !== null) {
+        if (qm.index < firstTagPos) lastQL = qm; else break;
+    }
+    // OWNERSHIP CHECK: only use this QLABEL if it belongs to our question.
+    // If foreign (e.g. rescue LLM assigned a tag from Q2's region to Q9),
+    // start from the first tag's position to avoid inheriting Q2's text.
+const _textBeforeFirstTag = fullTranscript.substring(0, firstTagPos);
+const _prevNLBeforeTag = _textBeforeFirstTag.lastIndexOf('\n');
+let startPos = _prevNLBeforeTag >= 0 ? _prevNLBeforeTag + 1 : 0;
+    if (lastQL) {
+        const qlNorm = normalizeForComparison(lastQL[1]);
+        const ownerNorm = normalizeForComparison(ownerQNum || '');
+
+        // PRIMARY CHECK: exact match
+        let qlabelBelongsToOwner = (qlNorm === ownerNorm);
+
+        // SECONDARY CHECK: prefix/suffix tolerance
+        if (!qlabelBelongsToOwner && lastQL[1]) {
+  const qlNormLib = normalizeLabelForMatch(lastQL[1], masterIds);
+            const ownerNormLib = normalizeLabelForMatch(ownerQNum || '', masterIds);
+            
+            // Check if qlNorm is a prefix of ownerNorm (e.g., "27" vs "27a")
+            if (ownerNormLib.startsWith(qlNormLib) && qlNormLib.length >= 2) {
+                qlabelBelongsToOwner = true;
+            }
+            // Check if ownerNorm is a prefix of qlNorm (e.g., "27a" vs "27")
+            else if (qlNormLib.startsWith(ownerNormLib) && ownerNormLib.length >= 2) {
+                qlabelBelongsToOwner = true;
+            }
+            // Check stripped roman suffix
+            else {
+                const stripped = qlNormLib.replace(/(i{1,4}|iv|vi{0,3}|ix)$/, '');
+                if (stripped && stripped === ownerNormLib) {
+                    qlabelBelongsToOwner = true;
+                }
+            }
+        }
+
+if (!qlabelBelongsToOwner && ownerQNum) {
+            const distance = Math.abs((lastQL.index || 0) - firstTagPos);
+            const qlHasNumber = /\d/.test(lastQL[1] || '');
+            if (distance < 5000 && !qlHasNumber) {
+                qlabelBelongsToOwner = true;
+            }
+        }
+
+        // QUATERNARY CHECK: numeric root match.
+        // Handles "Ans 1" (qlNorm="ans1" or "1") vs ownerQNum="Q1" or "1".
+        // normalizeForComparison may strip "Q" prefix or "Ans" — leaving just
+        // the digit. If both sides share the same digit root, it's our question.
+        if (!qlabelBelongsToOwner) {
+            const qlDigit  = (lastQL[1] || '').match(/(\d+)/)?.[1];
+            const ownDigit = String(ownerQNum || '').match(/(\d+)/)?.[1];
+            if (qlDigit && ownDigit && qlDigit === ownDigit) {
+                qlabelBelongsToOwner = true;
+            }
+        }
+
+        if (qlabelBelongsToOwner) {
+            // The question number label appears BEFORE [QLABEL:N].
+            // Search backwards for THIS question's label in many possible formats:
+            //   "N) "  "N. "  "N : "  "Ans N :"  "Ans N."  "Ans. N"
+const ownerDigits = String(ownerQNum || '').match(/(\d+)/);
+            let foundStart = false;
+            if (ownerDigits) {
+                const qn = ownerDigits[1];
+                const searchRegion = fullTranscript.substring(0, lastQL.index);
+                // Try patterns from most specific to least — find LAST match
+const patterns = [
+new RegExp(`(?:^|[\\s\\n])Ans[-.]?0*${qn}(?:[^0-9]|$)`, 'gi'),
+// bare number ONLY — require it's not preceded by a letter/digit (not inside formula)
+new RegExp(`(?:^|[\\n])${qn}[).:\\s][\\s)]`, 'g'),
+                ];
+                for (const re of patterns) {
+                    let qnMatch = null, m2;
+                    while ((m2 = re.exec(searchRegion)) !== null) qnMatch = m2;
+                    if (qnMatch) {
+                        const raw = qnMatch.index + (qnMatch[0].match(/^\s|\n/) ? 1 : 0);
+// REPLACE WITH:
+            if (lastQL.index - raw < 5000) {
+                            // Start from the student's "Ans N" / "N)" label — includes full answer
+                            startPos = raw;
+                            foundStart = true;
+                            break;
+                        }
+                    }
+                }
+            }
+if (!foundStart) {
+                // Last resort: search for ANY "Ans N" before the QLABEL
+                const fallbackRe = new RegExp(`(?:^|[\\s\\n])(Ans\\.?\\s*${String(ownerQNum||'').replace(/\D/g,'')})`, 'gi');
+                let fallbackMatch = null, fm;
+                const searchRegion2 = fullTranscript.substring(0, lastQL.index);
+                while ((fm = fallbackRe.exec(searchRegion2)) !== null) fallbackMatch = fm;
+
+                if (fallbackMatch) {
+                    startPos = fallbackMatch.index + (fallbackMatch[0].match(/^\s|\n/) ? 1 : 0);
+                } else {
+                    const textBeforeQL = fullTranscript.substring(0, lastQL.index);
+const prevNewline = textBeforeQL.lastIndexOf('\n');
+startPos = prevNewline >= 0 ? prevNewline + 1 : 0;
+
+                }
+            }
+        }
+    }
+
+const lastTagInfo = positions[positions.length - 1];
+// SUBPOINT QLABEL SKIP:
+// Student subpoints like "1)", "2)", "3)" emit [QLABEL:1], [QLABEL:2] etc.
+// These must NOT be used as endPos — they are inside the current question's answer.
+// Only stop at a QLABEL that belongs to a different master question.
+// A QLABEL belongs to a different question if its normalized label matches
+// a master ID that is NOT the current ownerQNum.
+let nextQlPos = -1;
+{
+    const qlScanRx = /\[QLABEL:([^\]]+)\]/g;
+    qlScanRx.lastIndex = lastTagInfo.end;
+    let qlm;
+    while ((qlm = qlScanRx.exec(fullTranscript)) !== null) {
+const qlNorm = normalizeLabelForMatch(qlm[1], masterIds);
+        const ownerNorm = normalizeLabelForMatch(ownerQNum || '', masterIds);
+        if (qlNorm === ownerNorm) continue;
+        const isMaster = masterIds.some(id => normalizeLabelForMatch(id, masterIds) === qlNorm);
+        if (!isMaster) continue;
+        // This QLABEL belongs to a real different master question — use it as endPos
+        nextQlPos = qlm.index;
+        break;
+    }
+}
+let endPos = fullTranscript.length;
+// Only use nextQlPos as endPos if it comes AFTER startPos.
+if (nextQlPos !== -1 && nextQlPos > startPos) {
+    endPos = Math.min(endPos, nextQlPos);
+}
+
+// MCQ DENSE BLOCK FIX:
+// In dense MCQ pages all questions share one [#P] tag on one line.
+// The transcript looks like: "[QLABEL:1] work is done... 2) c) [QLABEL:2] either OV..."
+// The slice from [QLABEL:1] to [QLABEL:2] still contains "2) c)" text before [QLABEL:2].
+// Fix: find the position of the NEXT question-number label (e.g. "2) " or "2. ")
+// that appears BEFORE the next [QLABEL:] and use that as endPos instead.
+// Only apply when ownerQNum is a simple integer (MCQ-style).
+const _isMcqType = (questionType || '').toUpperCase() === 'MCQ';
+if (ownerQNum && _isMcqType) {
+const ownerDigits = String(ownerQNum).match(/(\d+)/);
+    if (ownerDigits) {
+        const nextNum = parseInt(ownerDigits[1], 10) + 1;
+        const sliceRegion = fullTranscript.substring(startPos, endPos);
+        // ONLY match bare "N) " or "N. " format (MCQ inline) — NOT "Ans N" (long-answer).
+        const nmatch = sliceRegion.match(new RegExp(
+            `(?:^|[\\s\\n])${nextNum}(?:[).][\\s)]|\\s*:)`, 'im'
+        ));
+        if (nmatch && nmatch.index !== undefined) {
+            const candidateEnd = startPos + nmatch.index + (nmatch[0].match(/^[\s\n]/) ? 1 : 0);
+            if (candidateEnd > startPos) {
+                endPos = Math.min(endPos, candidateEnd);
+            }
+        }
+    }
+}
+
+    return fullTranscript.substring(startPos, endPos).trim();
+}
+
+questions.forEach(q => {
+    const normKey = normalizeForComparison(q.questionNumber);
+    const ownMapping = questionMappings.get(q._uid);
+
+if (ownMapping && ownMapping._gapText) {
+        // Gap-span assigned: use the gap text directly, no tag sweep needed
+        q.studentText = ownMapping._gapText;
+        q.requiresReview = true;
+    } else if (ownMapping && ownMapping.tags && ownMapping.tags.length > 0) {
+        q.studentText = sliceFromTags(ownMapping.tags, q.questionNumber, masterIds, q.type);
+
+
+// Strip Gemini OCR confidence markers (@@@word@@@) from stored student text
+        // BUT first check if any exist — their presence = OCR was uncertain → flag for review
+        if (q.studentText) {
+          const hasOcrUncertainty = /@{1,3}[^@\n]*@{1,3}/.test(q.studentText)
+    || /\[OCR_UNCERTAIN:[^\]]*\]/.test(q.studentText);
+            if (hasOcrUncertainty) q._ocrUncertain = true;
+            q.studentText = q.studentText.replace(/@{1,3}([^@\n]*)@{1,3}/g, '$1').replace(/(?<![a-zA-Z0-9])@(?![a-zA-Z0-9])/g, '').trim();
+        }
+    } else {
+        q.studentText = atomicSlices[normKey] || "";
+    }
+
+    if (q.studentText) {
+        const allTagMatches = [...q.studentText.matchAll(/\[#P:(\d+),\d+,\d+\]/g)];
+        allTagMatches.forEach(m => {
+            pageMap.get(q._uid).add(parseInt(m[1], 10));
+        });
+    }
+
+    if (ownMapping && ownMapping.tags) {
+        ownMapping.tags.forEach(t => {
+            const match = t.match(/\[#P:(\d+),/);
+            if (match) pageMap.get(q._uid).add(parseInt(match[1], 10));
+        });
+    }
+});
+
+            // ── ORPHAN-ANSWER RECOVERY (safe, additive) ─────────────────────────────
+            // A question can end up with a FOREIGN bleed slice (a DIFFERENT question's
+            // answer) when the boundary resolver mis-places a label — observed with a
+            // sub-lettered OR label sitting right before a [DIAGRAM] (e.g. "Ans 23. (b)"
+            // → Q23.B wrongly received Q22's text). If a question's slice is a foreign
+            // bleed AND its OWN answer label exists in the transcript, re-slice from that
+            // own label. It ONLY fires on foreign-bleed + findable own-label, so a
+            // correctly-mapped question (whose slice already contains its own label) is
+            // never touched.
+            (function recoverOrphanAnswers(qs) {
+                const _root = s => (String(s || '').match(/(\d+)/) || [])[1] || '';
+                const labelRe = /\[QLABEL:([^\]]+)\]/g;
+                const labelHits = [];
+                let lm;
+                while ((lm = labelRe.exec(fullTranscript)) !== null) {
+                    const raw = lm[1].trim();
+                    labelHits.push({ pos: lm.index, end: lm.index + lm[0].length, raw, root: _root(raw), norm: normalizeLabelForMatch(raw, masterIds), used: false });
+                }
+                for (const q of qs) {
+                    const myNorm = normalizeLabelForMatch(q.questionNumber, masterIds);
+                    const myRoot = _root(q.questionNumber);
+                    const txt = q.studentText || '';
+                    if (!myNorm || !myRoot || txt.length < 10) continue;
+                    // What question does the slice START with? A correctly-mapped question
+                    // always begins with its OWN label; if it begins with a DIFFERENT
+                    // question's label, the slice is a foreign bleed. (Checking only the
+                    // start is what makes this safe — a trailing bleed of the next answer
+                    // does not trigger it, and working questions are never disturbed.)
+                    const fm = txt.match(/\[QLABEL:[^\]]*?(\d+)[^\]]*\]|(?:^|\s)Ans\.?\s*(\d+)/i);
+                    const bleedRoot = fm ? (fm[1] || fm[2]) : '';
+                    if (!bleedRoot || bleedRoot === myRoot) continue; // starts with own label → not a bleed
+                    // Locate this question's OWN answer in the transcript.
+                    // OR pairs (12.A/12.B, 23.A/23.B, …): the student wrote ONE answer under the
+                    // parent number ("Ans 23"); recover the WHOLE parent block by digit-root and
+                    // let both OR sides share it (grader picks the winner). Using a sub-lettered
+                    // match here would wrongly split a subpart-labelled answer across the sides.
+                    // Non-OR: match this question's exact normalized id, and claim it (used) so a
+                    // sibling can't grab the same span.
+                    const isOR = /alternative question \(or\)/i.test(q.checkingInstructions || '') || /\.[AB]$/i.test(String(q.questionNumber));
+                    const own = isOR
+                        ? labelHits.filter(h => h.root === myRoot).sort((a, b) => a.pos - b.pos)[0]
+                        : labelHits.find(h => h.norm === myNorm && !h.used);
+                    if (!own) continue;
+                    // Slice from just after the own label to the next label of a DIFFERENT root.
+                    let sliceEnd = fullTranscript.length;
+                    for (const h of labelHits) {
+                        if (h.pos > own.end && h.root && h.root !== myRoot) { sliceEnd = h.pos; break; }
+                    }
+                    const recovered = fullTranscript.substring(own.end, sliceEnd).trim();
+                    if (recovered.length >= 10) {
+                        q.studentText = recovered;
+                        q.requiresReview = true;
+                        if (!isOR) own.used = true;
+                        console.log(`[OrphanRecovery] Q${q.questionNumber}: re-sliced from own label "${own.raw}"${isOR ? ' (OR parent)' : ''} (was foreign bleed of Q${bleedRoot})`);
+                    }
+                }
+            })(questions);
+
+            // ── SUBPART TEXT INHERITANCE ────────────────────────────────────────────
+            // Problem: OCR emits ONE [QLABEL:Ans 1] for both Q1(i) and Q1(ii).
+            // Deterministic resolver maps all [#P] tags to Q1(i) (first match).
+            // Q1(ii) gets zero tags → studentText = "" → grader shows "No specific text".
+            //
+            // Fix: For each subpart with empty studentText, find its parent question
+            // (same numeric prefix, e.g. "1" for "1i" and "1ii"). If the parent or
+            // any sibling has non-empty studentText, copy the FULL parent-family text
+            // to all empty siblings. The grader can then identify the relevant part.
+            //
+            // Safety: only fires when subpart has no studentText. Never overwrites.
+            // ──────────────────────────────────────────────────────────────────────────
+            (function inheritSubpartText(qs) {
+                // Group questions by their numeric parent prefix (e.g. "1", "2", "3")
+                const familyMap = new Map(); // parentPrefix -> [question, ...]
+                qs.forEach(q => {
+                    const digits = String(q.questionNumber || '').match(/(\d+)/);
+                    if (!digits) return;
+                    const prefix = digits[1];
+                    if (!familyMap.has(prefix)) familyMap.set(prefix, []);
+                    familyMap.get(prefix).push(q);
+                });
+
+                familyMap.forEach((members, prefix) => {
+                    // Only act on families that have >1 member (i.e. actual subparts)
+                    if (members.length < 2) return;
+
+                    // Collect all non-empty studentText from this family
+                    const richText = members
+                        .map(m => m.studentText || '')
+                        .filter(t => t.trim().length > 0)
+                        .join('\n');
+
+                    // If entire family empty, look for atomicSlices entry whose
+                    // normalised key starts with the parent prefix (e.g. "ans1" for prefix "1").
+                    // This fires when OCR emits [QLABEL:Ans 1] but masters are Q1(i)/Q1(ii).
+                    let effectiveText = richText;
+                    if (!effectiveText) {
+                        const prefixNorm = normalizeForComparison(prefix); // e.g. "1"
+                        for (const [sliceKey, sliceText] of Object.entries(atomicSlices)) {
+                            if (sliceText && sliceText.trim().length > 0 &&
+                                (sliceKey === prefixNorm ||
+                                 sliceKey.endsWith(prefixNorm) ||
+                                 sliceKey.replace(/[^0-9]/g, '') === prefixNorm)) {
+                                effectiveText = sliceText;
+                                console.log(`[SubpartInherit] Family ${prefix} all empty — using atomicSlices["${sliceKey}"] as fallback`);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!effectiveText) return; // truly nothing to share
+
+                    // Only fill in members that are genuinely empty. A member that
+                    // already has its OWN resolved text (its own [QLABEL] was found)
+                    // must never be overwritten with the family blob — MCQ subparts
+                    // especially: each has a one-line answer, and blending siblings'
+                    // text together breaks the downstream deterministic letter
+                    // extractor for every subpart but the first one it matches.
+    members.forEach(m => {
+        if ((m.studentText || '').trim().length > 0) return;
+        m.studentText = effectiveText;
+        console.log(`[SubpartInherit] Set family text for ${m.questionNumber} (was empty)`);
+    });
+                });
+            })(questions);
+            // ─────────────────────────────────────────────────────────────────────────
+
+            // ── SHARED DIAGRAM INHERITANCE ──────────────────────────────────────────
+            // Problem: A student often draws ONE diagram that covers multiple sub-parts
+            // (e.g. Q17 a) and Q17 b)). The trailing-untagged fix correctly attaches
+            // the diagram to the first sub-part (Q17 a)). But Q17 b) — which also
+            // expects a diagram per its imagePrompt — never sees it, and the grader
+            // says "No diagram provided."
+            //
+            // Fix (post-slice, non-destructive):
+            // For each question that:
+            //   1. Has imagePrompt (expects a student-drawn diagram)
+            //   2. Its own studentText has NO [DIAGRAM] block
+            //   3. A preceding sibling question (same parent prefix, e.g. "17") HAS [DIAGRAM]
+            // → Prepend that sibling's [DIAGRAM] block(s) to this question's studentText.
+            //
+            // "Parent prefix" = the shared numeric prefix before the sub-part letter.
+            // Q17 a) norm="17a" → prefix="17"  |  Q17 b) norm="17b" → prefix="17" ✓
+            // Q13 a) norm="13a" → prefix="13"  |  Q13 b) norm="13b" → prefix="13"
+            //   (Q13 b) has no imagePrompt so it is not touched.)
+            //
+            // Safety: only fires when imagePrompt is set AND no own [DIAGRAM] exists.
+            // Never removes content. Never modifies questions without imagePrompt.
+            (function inheritSharedDiagrams(qs) {
+                const diagramBlockRe = /\[DIAGRAM\][\s\S]*?\[\/DIAGRAM\]/g;
+
+                function extractDiagramBlocks(text) {
+                    const blocks = [];
+                    let m;
+                    diagramBlockRe.lastIndex = 0;
+                    while ((m = diagramBlockRe.exec(text)) !== null) blocks.push(m[0]);
+                    return blocks;
+                }
+
+                // Parent prefix: strip trailing single alpha char from normalised ID
+                // "17a" → "17", "6ci" → "6c", "1ai" → "1a"
+                function parentPrefix(normId) {
+                    return normId.replace(/[a-z]$/, '');
+                }
+
+                qs.forEach((q, idx) => {
+                    if (!q.imagePrompt) return;                        // doesn't need a diagram
+                    if ((q.studentText || '').includes('[DIAGRAM]')) return; // already has one
+
+                    const normQ  = normalizeForComparison(q.questionNumber);
+                    const prefix = parentPrefix(normQ);
+                    if (!prefix) return;                               // nothing to match against
+
+                    // Walk backwards through preceding questions to find sibling with [DIAGRAM]
+                    for (let i = idx - 1; i >= 0; i--) {
+                        const sib     = qs[i];
+                        const normSib = normalizeForComparison(sib.questionNumber);
+                        if (!normSib.startsWith(prefix)) break;       // left the sibling family
+                        const blocks = extractDiagramBlocks(sib.studentText || '');
+                        if (blocks.length === 0) continue;
+
+                        // Inherit: prepend sibling's diagram block(s) with a clear label
+                        q.studentText = '[NOTE: Student drew a shared diagram in ' + sib.questionNumber + ' — reproduced here for grading]\n' + blocks.join('\n') + '\n' + (q.studentText || '');
+                        q.studentText = q.studentText.trim();
+                        console.log('[DiagramInherit] ' + q.questionNumber + ' inherited diagram from ' + sib.questionNumber);
+                        break;
+                    }
+                });
+            })(questions);
+
+            // ── LETTERED SIBLING MISLABEL CANDIDATE (A/B diagram pairs) ─────────────
+            // Problem: a two-part diagram question (e.g. 21.A = male reproductive
+            // system, 21.B = female reproductive system) is NOT an OR-pair — both
+            // parts are required, each expects its OWN diagram. If the student
+            // mislabels their diagram (or OCR misreads the letter), one side ends up
+            // completely empty ("not attempted") while the OTHER side holds content
+            // that may actually belong to the empty one. inheritSharedDiagrams above
+            // only walks BACKWARDS and assumes a genuinely-shared diagram — it can't
+            // recover this case (the empty side is usually the EARLIER one, the
+            // mislabeled content the LATER one).
+            //
+            // Fix: for a strict two-member ".A"/".B" family (excluding real OR-pairs,
+            // which are already handled via the OR-PAIR LAW) where exactly one side
+            // is completely empty and the other has a [DIAGRAM] block, hand the empty
+            // side a CANDIDATE copy of that diagram — clearly flagged as possibly
+            // mislabeled — and let the grading LLM's topic judgment (LETTERED SIBLING
+            // MISLABEL LAW) decide which side it actually belongs to. Never removes
+            // the diagram from its originally-labeled side; both may end up seeing it,
+            // exactly like OR-pairs already do.
+            (function flagLetteredDiagramMislabelCandidates(qs) {
+                const isOrPair = q => /alternative question \(or\)/i.test(q.checkingInstructions || '');
+
+                const pairs = new Map(); // numeric root -> [question, ...]
+                qs.forEach(q => {
+                    const norm = normalizeForComparison(q.questionNumber);
+                    const m = norm.match(/^(\d+)([ab])$/);
+                    if (!m) return;
+                    const root = m[1];
+                    if (!pairs.has(root)) pairs.set(root, []);
+                    pairs.get(root).push(q);
+                });
+
+                pairs.forEach(members => {
+                    if (members.length !== 2) return;                 // only clean A/B pairs
+                    if (members.some(isOrPair)) return;                // real OR-pairs handled elsewhere
+                    if (!members.every(m => m.imagePrompt)) return;    // both sides must expect a diagram
+
+                    const empty = members.find(m => (m.studentText || '').trim().length === 0);
+                    const other = members.find(m => m !== empty);
+                    if (!empty || !other) return;
+
+                    const diagramMatch = (other.studentText || '').match(/\[DIAGRAM\][\s\S]*?\[\/DIAGRAM\]/);
+                    if (!diagramMatch) return;
+
+                    empty.studentText = `[NOTE: This question has no diagram of its own in the transcript — the only diagram found nearby is labeled for ${other.questionNumber}. Check whether its CONTENT actually matches THIS question's own topic before deciding (the label may be a student mislabel or OCR letter misread). If the content matches this question's topic, grade it normally as this question's answer. If it clearly matches ${other.questionNumber}'s topic instead, this remains not attempted — award 0.]\n${diagramMatch[0]}`;
+                    empty.requiresReview = true;
+                    console.log(`[LetteredMislabel] ${empty.questionNumber}: flagged candidate diagram from ${other.questionNumber} for grading-time topic check`);
+                });
+            })(questions);
+
+            // ── DIAGRAM INHERITANCE AUDIT ─────────────────────────────────────────────
+// After ALL inheritance passes, log any question that still expects a diagram
+// but has no [DIAGRAM] in its studentText. This surfaces lost diagrams early.
+questions.forEach(q => {
+    if (!q.imagePrompt) return;
+    if ((q.studentText || '').includes('[DIAGRAM]')) return;
+    console.warn(
+        `[DiagramAudit] Q${q.questionNumber} expects a diagram (imagePrompt set) ` +
+        `but studentText has NO [DIAGRAM] block. ` +
+        `studentText length=${( q.studentText || '').length}. ` +
+        `This question will likely be graded incorrectly.`
+    );
+});
+// ── END DIAGRAM INHERITANCE AUDIT ────────────────────────────────────────
+            // ── END SHARED DIAGRAM INHERITANCE ─────────────────────────────────────
+
+            // ── SUB-PART PAGE INHERITANCE ────────────────────────────────────────────
+            // Problem: Q29.(ii), Q29.(iii) share one [QLABEL:29.] with parent.
+            // Only first sub-part gets [#P] tags. Others get empty pageMap → index -1.
+            // Fix: inherit pages from nearest sibling with same parent number.
+            questions.forEach(q => {
+                const myPages = pageMap.get(q._uid);
+                if (!myPages || myPages.size > 0) return; // already has pages — skip
+
+                const parentMatch = q.questionNumber.match(/(\d+)/);
+                if (!parentMatch) return;
+                const parentNum = parentMatch[1];
+
+                for (const sibling of questions) {
+                    if (sibling._uid === q._uid) continue;
+                    const sibMatch = sibling.questionNumber.match(/(\d+)/);
+                    if (!sibMatch || sibMatch[1] !== parentNum) continue;
+                    const sibPages = pageMap.get(sibling._uid);
+                    if (sibPages && sibPages.size > 0) {
+                        sibPages.forEach(p => myPages.add(p));
+                        console.log(`[PageInherit] Q${q.questionNumber} inherited pages [${[...sibPages].join(',')}] from Q${sibling.questionNumber}`);
+                        break;
+                    }
+                }
+            });
+// ── END SUB-PART PAGE INHERITANCE ───────────────────────────────────────
+
+questions.forEach(q => {
+                if (q.studentText && q.studentText.trim().length > 10) return;
+                const parentMatch = q.questionNumber.match(/(\d+)/);
+                if (!parentMatch) return;
+                const parentNum = parentMatch[1];
+                for (const sibling of questions) {
+                    if (sibling._uid === q._uid) continue;
+                    const sibMatch = sibling.questionNumber.match(/(\d+)/);
+                    if (!sibMatch || sibMatch[1] !== parentNum) continue;
+                    if (!sibling.studentText || sibling.studentText.trim().length <= 10) continue;
+                    q.studentText = sibling.studentText;
+                    console.log(`[TextInherit] Q${q.questionNumber} inherited text from Q${sibling.questionNumber}`);
+                    break;
+                }
+            });
+            // ── END SUB-PART TEXT INHERITANCE ────────────────────────────────────────
+
+// OR-RESOLUTION happens inside the grader via OR-PAIR LAW (see GRADING_SYSTEM_INSTRUCTION).
+            // Losing side hidden post-grading by computeOrLoserQNums() on the frontend.
+
+            // ─── OCR SELF-VERIFICATION PASS (SA/LA questions only) ──────────────────────
+            // The grading-time image cross-check (still in place below) asks ONE call to
+            // both re-verify a transcript against the image AND apply grading logic — in
+            // practice this does not reliably work: the model treats its own already-
+            // produced text transcript as authoritative and doesn't do the harder work of a
+            // genuinely fresh, careful re-read, even with the real image sitting right next
+            // to it (observed directly: a fabricated derivation graded as wrong when the
+            // actual handwriting was a complete, correct proof, in a grading call that very
+            // likely already included the page image). A narrow, single-purpose task is more
+            // reliable than the same instruction bundled into a bigger, multi-purpose one —
+            // so instead of asking the grader to also verify, run a small, focused, DEDICATED
+            // re-transcription pass for every SA/LA question before grading ever runs, using
+            // only that question's own page image and its own current transcript.
+            //
+            // Never silently prefers either reading. If the re-check confirms the original,
+            // nothing changes. If it disagrees, the corrected reading is used for grading (a
+            // narrow re-read of one region is more trustworthy than a first pass that had to
+            // process the whole multi-page paper at once) — but the question is unconditionally
+            // forced to requiresReview with both readings shown (see REPORT RECONSTRUCTION
+            // below), so a teacher makes the final call on any genuine disagreement. This can
+            // only add review flags, never silently swap a correct grade for a wrong one.
+            for (const q of questions) {
+                if (q.type !== 'SA' && q.type !== 'LA') continue;
+                if (!q.studentText || q.studentText.trim().length < 10) continue; // nothing to verify
+                const pagesForQ = pageMap.get(q._uid) || new Set();
+                const firstPage = Array.from(pagesForQ).sort((a, b) => a - b)[0];
+                if (!firstPage) continue;
+                const pageImagePart = imageParts[firstPage - 1]; // imageParts is 0-indexed
+                if (!pageImagePart || pageImagePart._pdfPagePlaceholder) continue;
+
+                try {
+                    // Scale the output budget to the input length. A fixed 2000-token cap
+                    // truncated long multi-part answers mid-sentence (observed directly: a
+                    // long, CORRECT derivation got cut off after two lines, and the truncated
+                    // fragment was then wrongly accepted as a deliberate "correction",
+                    // replacing a good transcript with an incomplete one and dropping a
+                    // correct grade to 0). Also stop truncating the INPUT reference text —
+                    // a verification call can't confirm/correct what it was never shown.
+                    const verifyOutputBudget = Math.max(3000, Math.ceil(q.studentText.length / 2) + 1000);
+                    const verifyModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+                    const verifyResult = await callGeminiWithRetry(verifyModel, {
+                        contents: [{
+                            role: 'user',
+                            parts: [
+                                pageImagePart,
+                                { text: `You are re-checking ONE specific answer on this page for transcription accuracy — nothing else on the page matters for this task.
+
+Question ${q.questionNumber}'s answer was previously transcribed as:
+"""
+${q.studentText}
+"""
+
+Look ONLY at the handwritten region on this page that answers Question ${q.questionNumber}. Character by character, digit by digit, symbol by symbol, does the transcription above EXACTLY match what is written? You are checking transcription accuracy only, like a proofreader checking a typed copy against a handwritten original — do NOT evaluate whether the answer is mathematically correct, do NOT fix a wrong derivation, do NOT recalculate anything.
+
+If the transcription exactly matches the ink, respond with exactly: SAME
+If it does NOT match, respond with ONLY the FULL corrected transcription, start to finish — never a partial excerpt or just the part that changed (same format — LaTeX for math, [#P:...] tags preserved where you can still identify them) — nothing else, no explanation, no preamble.` }
+                            ]
+                        }],
+                        generationConfig: {
+                            candidateCount: 1,
+                            seed: 42,
+                            temperature: 0,
+                            topP: 0,
+                            maxOutputTokens: verifyOutputBudget,
+                            thinkingConfig: { thinkingBudget: 0 }
+                        }
+                    });
+                    const verifyCandidate = verifyResult.response.candidates[0];
+                    const verifyFinishReason = verifyCandidate.finishReason;
+                    const verifyText = (verifyCandidate.content.parts[0].text || '').trim();
+                    // If the model's own response got cut off by the output limit, its
+                    // content is an unreliable partial fragment, not a real correction —
+                    // discard it and keep the original rather than trust an incomplete
+                    // answer that would otherwise look like "the student wrote less".
+                    // Tolerant confirmation check — an exact "SAME" match is too brittle if
+                    // the model adds trivial punctuation/wrapping despite instructions (e.g.
+                    // "SAME." or "The transcription is the same."). Treat any short response
+                    // whose content is essentially just the word "same" as a confirmation,
+                    // not a correction, so trivial formatting variance doesn't get mistaken
+                    // for a genuine disagreement (which is what was driving the near-100%
+                    // flag rate observed — most of that was truncation, but this closes the
+                    // other contributing gap).
+                    const isConfirmation = /^[^a-z]*same[^a-z]*$/i.test(verifyText) && verifyText.length < 20;
+                    // Defense in depth beyond the finishReason check: a "correction" that is
+                    // drastically shorter than a reasonably long original is far more likely
+                    // to be an incomplete re-transcription than a student who "actually wrote
+                    // less" — a real correction is usually comparable in length or longer
+                    // (fixing wrong content), rarely a fraction of the original.
+                    const suspiciouslyShort = q.studentText.length > 100 && verifyText.length < q.studentText.length * 0.3;
+                    if (verifyFinishReason === 'MAX_TOKENS') {
+                        console.warn(`[OCRVerify] Q${q.questionNumber}: verification response truncated (budget=${verifyOutputBudget}) — discarding, keeping original transcript`);
+                    } else if (suspiciouslyShort) {
+                        console.warn(`[OCRVerify] Q${q.questionNumber}: "correction" is ${verifyText.length} chars vs original ${q.studentText.length} chars — too short to trust, discarding, keeping original transcript`);
+                    } else if (verifyText && !isConfirmation && verifyText.length > 5) {
+                        console.log(`[OCRVerify] Q${q.questionNumber}: verification pass disagrees with original transcript — will flag for review`);
+                        q._ocrVerificationOriginal = q.studentText;
+                        q.studentText = verifyText;
+                        q._ocrVerificationDisagreement = true;
+                    }
+                } catch (verifyErr) {
+                    console.warn(`[OCRVerify] Q${q.questionNumber}: verification call failed, keeping original transcript: ${verifyErr.message}`);
+                }
+            }
+            // ─── END OCR SELF-VERIFICATION PASS ──────────────────────────────────────────
+
+            // ─── BATCH GRADING (UNCHANGED) ───────────────────────────────────────────
+            const MAX_BATCH_WEIGHT = 16;
+            const questionBatches = [];
+            let currentBatch = [];
+            let currentWeight = 0;
+
+for (const q of questions) {
+// Extra weight proportional to studentText size — prevents large DIAGRAM
+                // blocks from inflating the prompt and truncating later questions' results.
+                // Binary hasDiagram+4 is too aggressive on Biology/Science papers with
+                // many small diagrams. Use text length instead: only large blocks get
+                // extra weight. Short arrow diagrams (<500 chars) get no penalty.
+                const studentTextLen = (q.studentText || '').length;
+                const textWeight = studentTextLen > 2000 ? 4 : studentTextLen > 500 ? 2 : 0;
+                let weight = (q.marks > 2 ? 4 : (q.marks === 2 ? 2 : 1)) + textWeight;
+                if (currentWeight + weight > MAX_BATCH_WEIGHT && currentBatch.length > 0) {
+                    questionBatches.push(currentBatch);
+                    currentBatch = [];
+                    currentWeight = 0;
+                }
+                currentBatch.push(q);
+                currentWeight += weight;
+            }
+            if (currentBatch.length > 0) questionBatches.push(currentBatch);
+
+            if (questionBatches.length === 0) throw new Error("LIBRARIAN_NO_SLICES");
+
+            let questionWiseReport = [];
+            for (let bIdx = 0; bIdx < questionBatches.length; bIdx++) {
+                if (bIdx > 0) await sleep(3500);
+                const batch = questionBatches[bIdx];
+                const batchProgress = Math.round(((bIdx + 1) / questionBatches.length) * 50);
+                await snapshot.ref.update({
+                    currentStep: 2,
+                    progress: 25 + batchProgress,
+                    statusDetails: `Grading Questions ${batch[0].questionNumber} to ${batch[batch.length - 1].questionNumber}`
+                });
+
+                // T1-2: Collect original page images for (a) diagram questions and
+                // (b) SA/LA derivation questions in this batch.
+                //   - imagePrompt != null: question expects a student-drawn diagram — used
+                //     to visually verify the diagram itself.
+                //   - type SA/LA: multi-step derivation/working questions. OCR is a vision-LLM
+                //     transcribing handwriting, and under ambiguity it can silently rewrite a
+                //     wrong or non-standard derivation into the mathematically "clean" one
+                //     (observed directly: a wrong final answer transcribed as the textbook-
+                //     correct one). The grader gets the actual page so it can cross-check the
+                //     transcript's working/final line against what is really written, instead
+                //     of blindly trusting a transcript that may have been silently corrected.
+                // We find the page numbers those questions were answered on (from pageMap),
+                // then pass those specific page images to the grader. Cost is a real image-
+                // token cost per page (roughly $0.00008/image at current Flash pricing) —
+                // negligible per paper, so this is not narrowly gated to STEM/high-mark
+                // questions the way the diagram-only path historically was.
+                const diagramImageParts = [];
+                const seenDiagramPages = new Set();
+                for (const q of batch) {
+                    const needsPageImage = !!q.imagePrompt || q.type === 'SA' || q.type === 'LA';
+                    if (!needsPageImage) continue;
+      const pagesForQ = pageMap.get(q._uid) || new Set();
+                    for (const pgNum of pagesForQ) {
+                        if (seenDiagramPages.has(pgNum)) continue; // already added this page
+                        seenDiagramPages.add(pgNum);
+                        const pageImagePart = imageParts[pgNum - 1]; // imageParts is 0-indexed
+                        if (pageImagePart && !pageImagePart._pdfPagePlaceholder) {
+                            // Tag each image with its real page number so the grader can never
+                            // confuse "which image is which page" with the [#P:page,y,x] tags in
+                            // the transcript — see the labeling + instruction at the call site.
+                            diagramImageParts.push({ pageNum: pgNum, part: pageImagePart });
+                        }
+                    }
+                }
+
+// FIX 2: Build per-question allowed [#P] coordinate map from studentText.
+// Each question's studentText contains ONLY the [#P] tags that belong to it
+// (sliced by librarian). We extract those and store as the ground-truth
+// allowed coords for Fix 3 clamping after grading.
+const questionCoordBounds = new Map(); // q._uid -> { allowedCoords: [{page,y,x}], byPage: Map<page, {minY,maxY}> }
+for (const q of batch) {
+    const text = q.studentText || '';
+    const coordRe = /\[#P:(\d+),(\d+),(\d+)\]/g;
+    let m;
+    const allowed = [];
+    while ((m = coordRe.exec(text)) !== null) {
+        allowed.push({ page: parseInt(m[1], 10), y: parseInt(m[2], 10), x: parseInt(m[3], 10) });
+    }
+    // Build per-page y-range for fast clamping
+    const byPage = new Map();
+    for (const c of allowed) {
+        if (!byPage.has(c.page)) byPage.set(c.page, { minY: c.y, maxY: c.y });
+        const r = byPage.get(c.page);
+        if (c.y < r.minY) r.minY = c.y;
+        if (c.y > r.maxY) r.maxY = c.y;
+    }
+    questionCoordBounds.set(q._uid, { allowed, byPage });
+}
+
+const slicedTranscript = batch.map(q => {
+    const tags = (tagMapping[q._uid] || []);
+    if (tags.length === 0) {
+        // Fallback: use studentText assigned by librarian
+        return `[Q:${q._uid}]\n${q.studentText || '(no text detected)'}`;
+    }
+
+    // STEP 1: Original logic — unchanged.
+    const allLines = fullTranscriptClean.split('\n');
+    const matchedIndices = new Set(
+        allLines
+            .map((line, i) => tags.some(tag => line.includes(tag)) ? i : -1)
+            .filter(i => i !== -1)
+    );
+
+    // STEP 2: Block expansion — only for [TABLE] and [DIAGRAM] blocks.
+    // Does nothing for prose, equations, theory — those have no [TABLE] marker.
+    const expandedIndices = new Set(matchedIndices);
+    let inBlock = false;
+    let blockStart = -1;
+    let blockCloseTag = '';
+
+    for (let i = 0; i < allLines.length; i++) {
+        const line = allLines[i];
+        const trimmed = line.trimStart();
+
+        if (!inBlock) {
+            if (trimmed.startsWith('[TABLE:') || trimmed.startsWith('[DIAGRAM]')) {
+                inBlock = true;
+                blockStart = i;
+                blockCloseTag = trimmed.startsWith('[TABLE:') ? '[/TABLE]' : '[/DIAGRAM]';
+            }
+        }
+
+        if (inBlock) {
+            if (matchedIndices.has(i)) {
+                for (let j = blockStart; j <= i; j++) expandedIndices.add(j);
+            }
+            if (i === blockStart && (matchedIndices.has(i - 1) || matchedIndices.has(i - 2))) {
+                expandedIndices.add(i);
+            }
+            if (expandedIndices.has(blockStart)) {
+                expandedIndices.add(i);
+            }
+            if (line.includes(blockCloseTag)) {
+                if (blockCloseTag === '[/TABLE]' && i + 1 < allLines.length &&
+                    allLines[i + 1].trimStart().startsWith('ΣVALS:')) {
+                    expandedIndices.add(i + 1);
+                }
+                inBlock = false;
+                blockStart = -1;
+                blockCloseTag = '';
+            }
+        }
+    }
+
+    const relevantLines = allLines
+        .filter((_, i) => expandedIndices.has(i))
+        .join('\n');
+
+    return `[Q:${q._uid}]\n${relevantLines || q.studentText || '(no text detected)'}`;
+}).join('\n\n---\n\n');
+
+                // ── SHARED-SUBPART MCQ PRE-RESOLUTION ────────────────────────────────
+                // Problem: MCQ subparts (e.g. Q1(i) and Q1(ii)) share the same inherited
+                // text block. The deterministic letter extractor can't anchor reliably,
+                // and the grader LLM gets confused because it sees the same text for both.
+                // Solution: before grading, make ONE cheap gemini-2.0-flash call per
+                // subpart family to extract which letter the student wrote for each subpart.
+                // Result stamped on q._resolvedMcqLetter — used in MCQ override block.
+                // ─────────────────────────────────────────────────────────────────────
+                {
+                    // Find MCQ subpart families where both siblings share the same text
+                    const mcqSubpartFamilies = new Map(); // parentNum -> [q, ...]
+                    for (const q of batch) {
+                        if (q.type !== 'MCQ' && q.type !== 'AR' && q.type !== 'Assertion-Reason') continue;
+                        const qNumRaw = String(q.questionNumber || '');
+                        const subPartMatch = qNumRaw.match(/(\d+)[.\s]*(?:\(([ivxIVX]+)\)|([ivxIVX]+))/i);
+                        if (!subPartMatch) continue;
+                        const parentNum = subPartMatch[1];
+                        const subPart = (subPartMatch[2] || subPartMatch[3] || '').toLowerCase();
+                        if (!subPart) continue;
+                        // Check if text looks like shared multi-subpart text
+                        const rawOcr = q.studentText || '';
+                        const looksShared = /ii[).\s]|iii[).\s]/i.test(rawOcr) && rawOcr.length > 40;
+                        if (!looksShared) continue;
+                        if (!mcqSubpartFamilies.has(parentNum)) mcqSubpartFamilies.set(parentNum, []);
+                        mcqSubpartFamilies.get(parentNum).push({ q, subPart });
+                    }
+
+                    for (const [parentNum, members] of mcqSubpartFamilies) {
+                        if (members.length < 2) continue;
+                        const sharedText = members[0].q.studentText || '';
+                        // Build prompt: list each subpart + its question + model answer
+                        const subpartLines = members.map(({ q, subPart }) =>
+                            `Subpart (${subPart}): Q: "${q.text || ''}" | Model answer: "${q.answer || ''}"`
+                        ).join('\n');
+
+                        const extractPrompt = `You are reading a student's handwritten answer sheet OCR output.
+The student answered Question ${parentNum} which has multiple sub-parts.
+The full answer text for Q${parentNum} is:
+"""
+${sharedText.substring(0, 600)}
+"""
+
+Sub-parts to identify:
+${subpartLines}
+
+For each sub-part:
+- If the model answer is an option letter (A/B/C/D), find which letter (a/b/c/d) the student wrote for that sub-part.
+  Look for patterns: "i) (a)", "ii) (c)", "i) a)", "ii) b)"
+- If the model answer is NOT a letter (e.g. "iii) fixed investment", "True", a phrase), extract the student's actual written answer for that sub-part.
+  Look for "ii) [answer text]" — whatever the student wrote after the sub-part Roman numeral.
+
+Roman numeral i = sub-part i, ii = sub-part ii, iii = sub-part iii, etc.
+
+Respond ONLY with a JSON object, no other text:
+{"results": [{"subPart": "i", "studentLetter": "A", "studentText": null}, {"subPart": "ii", "studentLetter": null, "studentText": "iii) fixed investments"}]}
+Use null for fields that do not apply. If you cannot determine anything for a sub-part, set both to null.`;
+
+                        try {
+                            const miniModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.0-flash' });
+                            const miniResult = await miniModel.generateContent({
+                                contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+                                generationConfig: { temperature: 0.0, maxOutputTokens: 256 }
+                            });
+                            const rawText = miniResult.response.candidates[0].content.parts[0].text || '';
+                            const parsed = extractJsonFromString(rawText);
+                            if (parsed && Array.isArray(parsed.results)) {
+                                for (const r of parsed.results) {
+                                    if (!r.subPart) continue;
+                                    const match = members.find(m => m.subPart === r.subPart.toLowerCase());
+                                    if (!match) continue;
+                                    if (r.studentLetter) {
+                                        match.q._resolvedMcqLetter = r.studentLetter.toUpperCase();
+                                        console.log(`[SharedMCQ] Q${match.q.questionNumber} subPart=${r.subPart} resolvedLetter=${match.q._resolvedMcqLetter}`);
+                                    } else if (r.studentText) {
+                                        // Non-letter answer (e.g. "iii) fixed investment")
+                                        // Replace studentText with just this subpart's answer
+                                        // so grader LLM is not confused by shared text block
+                                        match.q.studentText = r.studentText;
+                                        match.q._resolvedSubpartText = true;
+                                        console.log(`[SharedMCQ] Q${match.q.questionNumber} subPart=${r.subPart} resolvedText="${r.studentText}"`);
+                                    }
+                                }
+                            }
+                        } catch (miniErr) {
+                            console.warn(`[SharedMCQ] Mini-resolve failed for Q${parentNum}:`, miniErr.message);
+                            // Non-fatal — falls through to existing shared-text guard
+                        }
+                    }
+                }
+                // ── END SHARED-SUBPART MCQ PRE-RESOLUTION ────────────────────────────
+
+            const batchResult = await gradeQuestionBatch(
+                    slicedTranscript,
+                    batch, strictness, subject, jobId, allRules, diagramImageParts, jobData, questions
+                );
+questionWiseReport.push(...batchResult.map(qr => {
+                    const usedYByPage = new Map(); // page -> Set of y already assigned (dedup tracker)
+                    // Find this question's known pages from pageMap (built by librarian)
+                    const origQ = batch.find(q => q._uid === qr.questionNumber || q._uid === qr._uid);
+                    const knownPages = origQ ? Array.from(pageMap.get(origQ._uid) || new Set()) : [];
+                    // Use last known page as fallback (not page 1 — long answers end on later pages)
+                    const fallbackPage = knownPages.length > 0 ? Math.max(...knownPages) : null;
+
+                    // FIX 2+3: Retrieve the allowed coord bounds for this question
+                    const coordBounds = origQ ? (questionCoordBounds.get(origQ._uid) || null) : null;
+
+                    return {
+                        ...qr,
+                        stepWiseEvaluation: (qr.stepWiseEvaluation || []).map(step => {
+                            const rawPage = step.pageIndex;
+                            // Use AI's pageIndex if valid (>=1), else last known page, else null
+                            let resolvedPage = (rawPage && rawPage >= 1)
+                                ? rawPage
+                                : (fallbackPage !== null ? fallbackPage : null);
+
+                            // Sanitize stepPoint format (existing logic)
+                            let sp = (Array.isArray(step.stepPoint) && step.stepPoint.length >= 2)
+                                ? [Number(step.stepPoint[step.stepPoint.length - 2]), Number(step.stepPoint[step.stepPoint.length - 1])]
+                                : null;
+
+if (sp && coordBounds && coordBounds.byPage.size > 0) {
+                                const targetPage = resolvedPage;
+                                const pageRange = coordBounds.byPage.get(targetPage);
+                                if (!pageRange && coordBounds.byPage.size > 0) {
+                                    // AI put marker on wrong page — fix page only, keep y as-is
+                                    let bestPage = null, bestDist = Infinity;
+                                    coordBounds.byPage.forEach((r, pg) => {
+                                        const d = Math.abs(pg - (targetPage || 1));
+                                        if (d < bestDist) { bestDist = d; bestPage = pg; }
+                                    });
+                                    if (bestPage !== null) {
+                                        console.log(`[CoordFix] Q${qr.questionNumber} page mismatch — corrected to page ${bestPage}, y kept at ${sp[0]}`);
+                                        // Only fix resolvedPage, not sp — y stays where grader put it.
+                                        // (This assignment was previously missing — bestPage was computed
+                                        // and logged as "corrected" but never actually applied, so a
+                                        // grader-reported wrong page silently passed through uncorrected.)
+                                        resolvedPage = bestPage;
+                                    }
+                                }
+                                // Y clamping removed — grader picks y from actual answer position;
+                                // clamping to question label y-range causes markers to appear too high.
+                            }
+
+
+
+                            return {
+                                ...step,
+                                pageIndex: resolvedPage,
+                                stepPoint: sp
+                            };
+                        })
+                    };
+                }));
+            }
+
+            // ─── T1-3: POST-GRADING CONSISTENCY ENFORCER (zero LLM cost) ────────────
+            // Catches failure modes the grader produces inconsistently:
+            //   A) CAT-9: feedback says error but marks = maxMarks (desync)
+            //   B) CAT-5: feedback is non-trivial but full marks given
+            //   C) CAT-4: requiresReview was false but feedback has negative signals
+            //   D) NEW: marksAwarded is not a 0.5 multiple (e.g. 0.75, 1.33) — enforce rounding
+            //   E) NEW: finalFeedback bullet deduction numbers don't match 0.5 increments
+
+            // Deterministic 0.5 rounding helper
+            function roundToHalf(val, maxMarks, strictnessMode) {
+                const n = Number(val) || 0;
+                if (strictnessMode === 'Strict') {
+                    return Math.min(Math.floor(n * 2) / 2, maxMarks);
+                } else if (strictnessMode === 'Lenient') {
+                    return Math.min(Math.ceil(n * 2) / 2, maxMarks);
+                }
+                // Moderate (default): round to nearest 0.5
+                return Math.min(Math.round(n * 2) / 2, maxMarks);
+            }
+
+            // Sanitize feedback: replace non-0.5 deduction values in bullet points
+            // e.g. "(-0.75 marks)" → "(-1 marks)", "(-1.33 marks)" → "(-1.5 marks)"
+            function sanitizeFeedbackDeductions(feedbackText, strictnessMode) {
+                if (!feedbackText) return feedbackText;
+                return feedbackText.replace(/([-−])\s*(\d+(?:\.\d+)?)\s*(marks?)/gi, (match, sign, numStr, marksWord) => {
+                    const raw = parseFloat(numStr);
+                    if (isNaN(raw)) return match;
+                    let rounded;
+                    if (strictnessMode === 'Strict') {
+                        rounded = Math.ceil(raw * 2) / 2; // strict deductions round UP (more punitive)
+                    } else if (strictnessMode === 'Lenient') {
+                        rounded = Math.floor(raw * 2) / 2; // lenient deductions round DOWN (less punitive)
+                    } else {
+                        rounded = Math.round(raw * 2) / 2;
+                    }
+                    // Only change if it was NOT already a valid 0.5 multiple
+                    if (Math.abs(rounded - raw) < 0.001) return match; // already valid
+                    const display = rounded === Math.floor(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
+                    return `${sign}${display} ${marksWord}`;
+                });
+            }
+
+            const NEGATIVE_SIGNALS = [
+                'incorrect', 'wrong', 'error', 'missing', 'incomplete', 'not provided',
+                'not mentioned', 'does not', "doesn't", 'absent', 'failed', 'no diagram',
+                'unattempted', 'not attempted', 'calculation error', 'conceptual error',
+                'not matching', 'differs', 'mismatch'
+            ];
+questionWiseReport = questionWiseReport.map(qr => {
+                const maxMarks = qr.maxMarksForQuestion || 0;
+                let awarded    = qr.marksAwarded || 0;
+
+                // OCR uncertainty flag — set by text extraction above
+                const question = questions.find(q => String(q.questionNumber) === String(qr.questionNumber));
+                if (question && question._ocrUncertain && !qr.requiresReview) {
+                    const cleanedFbEarly = sanitizeFeedbackDeductions(qr.finalFeedback, strictness);
+                    return { ...qr, marksAwarded: awarded, requiresReview: true,
+                        finalFeedback: (cleanedFbEarly || '') + ' [OCR uncertain — please verify student handwriting.]' };
+                }
+
+                // D: Enforce 0.5 rounding on marksAwarded
+                const roundedAwarded = roundToHalf(awarded, maxMarks, strictness);
+                awarded = roundedAwarded;
+
+                // E: Sanitize feedback deduction numbers to 0.5 multiples
+                const cleanedFeedback = sanitizeFeedbackDeductions(qr.finalFeedback, strictness);
+
+                const feedback = (cleanedFeedback || '').toLowerCase();
+                const hasNegativeSignal = NEGATIVE_SIGNALS.some(sig => feedback.includes(sig));
+
+const isMcqFormat = (qr.type === 'MCQ') || (qr.type === 'AR') ||
+    (qr.type === 'Assertion-Reason') ||
+    (qr.maxMarksForQuestion <= 1 && !!(qr.finalFeedback || '').match(/^[A-Da-d]\s*[-–]/)) ||
+    !!(qr.finalFeedback || '').match(/^[A-Da-d]\s*[-–]/);
+
+
+
+    if (qr.type === 'True/False') {
+    const toTF = (s) => {
+        const n = (s||'').toLowerCase().replace(/[^a-z]/g,'');
+        if (n === 'true' || n === 't') return 'TRUE';
+        if (n === 'false' || n === 'f') return 'FALSE';
+        if (/\btrue\b/i.test(s||'')) return 'TRUE';
+        if (/\bfalse\b/i.test(s||'')) return 'FALSE';
+        return '';
+    };
+    const modelTF = toTF(qr.answer);
+    const studentTF = toTF(qr.studentText || qr.studentOcrAnswer || '');
+    if (modelTF && studentTF) {
+        const isCorrect = modelTF === studentTF;
+        const overrideMarks = isCorrect ? maxMarks : 0;
+        const syncedSteps = (qr.stepWiseEvaluation||[]).map((s,i)=>({...s, marks: i===0 ? overrideMarks : 0}));
+        return { ...qr, marksAwarded: overrideMarks,
+            finalFeedback: isCorrect ? `${studentTF==='TRUE'?'True':'False'} - Good work.` : `${studentTF==='TRUE'?'True':'False'} - Incorrect. Correct answer: ${modelTF==='TRUE'?'True':'False'}.`,
+            requiresReview: false, stepWiseEvaluation: syncedSteps };
+    }
+    return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback, requiresReview: true };
+}
+
+
+
+                if (isMcqFormat) {
+                    // DETERMINISTIC LETTER OVERRIDE:
+                    // Extract model answer letter — handle "(a) ...", "a)", "A", "(iii) fixed investments" etc.
+                    const _modelRaw = (qr.answer || '').trim();
+                    const _modelMatch = _modelRaw.match(/\b([A-Da-d])\b/) || _modelRaw.match(/\(?([A-Da-d])\)?/);
+                    const modelLetter = _modelMatch ? _modelMatch[1].toUpperCase() : _modelRaw.charAt(0).toUpperCase();
+
+                    // GUARD: if model answer has no valid A-D letter, this subpart is not
+                    // a letter-choice MCQ (e.g. short-answer subpart under MCQ parent type).
+                    // Skip deterministic path entirely — let LLM result stand as-is.
+                    if (!/^[A-D]$/.test(modelLetter)) {
+                        console.log('[MCQ Skip] Q' + qr.questionNumber + ': model answer "' + _modelRaw + '" has no A-D letter — skipping deterministic override');
+                    } else {
+const rawOcr = (qr.studentText || qr.studentOcrAnswer || '');
+
+// BLANK-ANSWER GUARD (deterministic, code-level — not just a prompt instruction).
+// If nothing but structural OCR artifacts remain after stripping labels/tags/page
+// markers, the student did not write an answer here at all. Force 0 regardless of
+// what the initial LLM grading pass may have guessed — a blank slot must never be
+// scored as if a choice was made (observed directly: a genuinely blank MCQ/AR slot
+// was awarded full marks). This runs BEFORE any letter/textCorrect matching below,
+// so stray structural noise (an adjacent question's boundary label, a page marker)
+// can never coincidentally "match" a correct option and slip through. Threshold is
+// exactly zero characters remaining, not "very short" — a genuine minimal answer
+// (just the option letter, e.g. "b") must still pass through normally.
+const _strippedForBlankCheck = rawOcr
+    .replace(/\[QLABEL:[^\]]*\]/gi, '')
+    .replace(/\[#P:[^\]]*\]/gi, '')
+    .replace(/\[PAGE[^\]]*\]/gi, '')
+    .replace(/\bAns\.?\s*\d+[.):\s]*/gi, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .trim();
+if (_strippedForBlankCheck.length === 0) {
+    console.log(`[MCQ Blank] Q${qr.questionNumber}: no real content after stripping structural tags — forcing not-attempted (0 marks)`);
+    const blankSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
+        ...step,
+        marks: 0,
+        comment: i === 0 ? 'Not attempted' : (step.comment || '')
+    }));
+    return { ...qr, marksAwarded: 0, finalFeedback: 'Not attempted.', requiresReview: false, stepWiseEvaluation: blankSteps };
+}
+
+// [CORRECTED] = OCR marked a crossed-out-then-rewritten answer (see OCR CORRECTION
+// MARKER law). The surviving answer is whatever the student wrote AFTER the tag.
+// Without this, the deterministic extractor below grabs the FIRST letter it sees —
+// i.e. the struck-out attempt — and wrongly scores the corrected MCQ as 0.
+const _hasCorrectedTag = /\[CORRECTED\]/i.test(rawOcr);
+
+let studentLetter = '';
+let _extractedSubPart = '';
+let _p0SucceededForSubpart = false;
+
+// Pattern 0: find THIS question's answer letter from rawOcr.
+// Handles ALL formats:
+//   "1) c)"  "1. D"  "1 : (d)"
+//   "Ans 1 : (d) D"  "Ans 1: d"  "Ans1 (d)"
+//   "29. (i) d)"  "29.(ii) b)"
+// Also handles questionNumber like "Q1(i)" where digits not at start.
+{
+    const qNumRaw = String(qr.questionNumber || '');
+    const subPartMatch = qNumRaw.match(/(\d+)[.\s]*(?:\(([ivxIVX]+)\)|([ivxIVX]+))?/i);
+    if (subPartMatch) {
+        const mainNum = subPartMatch[1];
+        const subPart = (subPartMatch[2] || subPartMatch[3] || '').toLowerCase();
+        _extractedSubPart = subPart;
+        let p0;
+        if (subPart) {
+            // Pattern 0-QLABEL (highest authority for subparts): anchor on THIS subpart's
+            // own [QLABEL:...] tag, which reliably contains the exact subpart in every OCR
+            // format seen ("Ans 22.i)", "Ans 22 (i)"), then take the first A-D option after
+            // it (before the next [QLABEL:]). Fixes shared-block subparts where the printed
+            // "(i)"-style patterns below miss because OCR emitted ".i)" with QLABEL noise.
+            // Lookbehind (?<![ivx]) stops "i" matching inside "ii"/"iii".
+            {
+                const _qlRe = new RegExp(`\\[QLABEL:[^\\]]*?${mainNum}[^\\]]*?(?<![ivx])${subPart}\\)[^\\]]*?\\]`, 'i');
+                const _qm = _qlRe.exec(rawOcr);
+                if (_qm) {
+                    const _start = _qm.index + _qm[0].length;
+                    const _next = rawOcr.indexOf('[QLABEL:', _start);
+                    const _seg = rawOcr.slice(_start, _next === -1 ? undefined : _next);
+                    const _lm = _seg.match(/\(\s*([A-Da-d])\s*\)/) || _seg.match(/(?:^|[\s])([A-Da-d])\s*[\).]/);
+                    if (_lm) {
+                        studentLetter = _lm[1].toUpperCase();
+                        _p0SucceededForSubpart = true;
+                        console.log(`[MCQ SubpartQLabel] Q${qr.questionNumber}: anchored letter="${studentLetter}"`);
+                    }
+                }
+            }
+            // Sub-part question: find mainNum then (subPart) then first A-D after
+            const re = new RegExp(
+                `(?:^|[\\s])(?:Ans\\.?\\s*)?${mainNum}[^(]*\\(${subPart}\\)\\s*[^A-Da-d\\n]*?([A-Da-d])(?:[)\\s]|$)`,
+                'im'
+            );
+            if (!studentLetter) p0 = rawOcr.match(re);
+            // Fallback: just find (subPart) then first A-D
+            if (!studentLetter && !p0) {
+                const re2 = new RegExp(`\\(${subPart}\\)\\s*([A-Da-d])(?:[)\\s]|$)`, 'im');
+                p0 = rawOcr.match(re2);
+            }
+            // Fallback: bare "iv." / "iv)" subpart marker (no wrapping parens) — the
+            // real OCR format for a grouped MCQ block written as one list, e.g.
+            // "i. (c)  ii. (b)  iii. (d)  iv. (a)". re/re2 above only match "(iv)".
+            // Lookbehind/lookahead of non-roman-letters stops "i" matching inside
+            // "ii"/"iii"/"iv" (e.g. subPart="i" must not hit the tail of "iii)").
+            if (!studentLetter && !p0) {
+                const re3 = new RegExp(`(?:^|[\\s\\n])(?<![ivx])${subPart}(?![ivx])[).]+\\s*\\(?([A-Da-d])\\)?`, 'im');
+                p0 = rawOcr.match(re3);
+            }
+        } else {
+            // Pattern 0-QLABEL (highest authority): anchor on THIS question's own
+            // [QLABEL:Ans N …]. Handles the "Ans N [QLABEL:Ans N] (x) [QLABEL:Ans N (x)]"
+            // MCQ layout where the letter sits AFTER the injected QLABEL — the "Ans N:" /
+            // "N)" patterns below miss it, so the extractor used to fall through to the
+            // first letter in a shared blob (Ans 1's), mis-scoring every other MCQ.
+            // \bAns\s*N\b keeps "Ans 3" from matching inside "Ans 13".
+            {
+                // (1) letter embedded in the answer's own QLABEL: [QLABEL:Ans N (x)]
+                let _qm = rawOcr.match(new RegExp(`\\[QLABEL:[^\\]]*?\\bAns\\s*${mainNum}\\s*\\(?([A-Da-d])\\)?\\s*\\]`, 'i'));
+                // (2) else first A-D right after the "Ans N" QLABEL, before the next label
+                if (!_qm) {
+                    const _q = rawOcr.match(new RegExp(`\\[QLABEL:[^\\]]*?\\bAns\\s*${mainNum}\\b[^\\]]*\\]`, 'i'));
+                    if (_q) {
+                        const _after = rawOcr.slice(_q.index + _q[0].length);
+                        const _cut = _after.search(/\[QLABEL:|(?:^|\s)Ans\s*\d/i);
+                        const _seg = _cut > 0 ? _after.slice(0, _cut) : _after;
+                        _qm = _seg.match(/\(?\s*([A-Da-d])\s*\)?(?:[).\s]|$)/);
+                    }
+                }
+                if (_qm) studentLetter = _qm[1].toUpperCase();
+            }
+            // Fallbacks (original): "Ans N : (d)" then "N) d"
+            if (!studentLetter) {
+                const ansRe = new RegExp(`(?:^|[\\s])Ans\\.?\\s*${mainNum}\\s*[:.]+\\s*\\(?([A-Da-d])\\)?`, 'im');
+                p0 = rawOcr.match(ansRe);
+                if (!p0) {
+p0 = rawOcr.match(new RegExp(`(?:^|[\\s\\[])${mainNum}[).:–-]+\\s*\\(?([A-Da-d])\\)?(?:[)\\s]|$)`, 'im'));
+                }
+            }
+        }
+        if (p0) {
+            studentLetter = p0[1].toUpperCase();
+            if (subPart) _p0SucceededForSubpart = true;
+        }
+    }
+}
+
+// Pattern 1: sub-part then answer — "(i) d)" or "(ii) b) text"
+if (!studentLetter) {
+const p1 = rawOcr.match(/(?:\([ivxIVX]+\)|[ivxIVX]+[).]\s*)\s*\(?([A-Da-d])\)?/);
+if (p1) studentLetter = p1[1].toUpperCase();
+}
+
+// Pattern 2: "Ans N: (c)" or "N: c"
+if (!studentLetter) {
+    const p2 = rawOcr.match(/(?:Ans\.?\s*\d+\s*[:.]\s*|^\s*\d+\s*[:.]\s*)\(?([A-Da-d])\)?/im);
+    if (p2) studentLetter = p2[1].toUpperCase();
+}
+
+// Pattern 3: remove roman numeral words then find A-D
+if (!studentLetter) {
+    const cleaned = rawOcr
+        .replace(/\b(iv|iii|ii|vi|vii|viii|ix|xi|xii|v|x)\b/gi, ' ')
+        .replace(/\(i\)/gi, ' ');
+    const p3 = cleaned.match(/(?:^|[\s()\[\].])([A-Da-d])(?:[\s()\[\].,)]|$)/);
+    if (p3) studentLetter = p3[1].toUpperCase();
+}
+
+// Pattern 4: last resort — any isolated A-D
+if (!studentLetter) {
+    const p4 = rawOcr.match(/\b([A-Da-d])\b/);
+    if (p4) studentLetter = p4[1].toUpperCase();
+}
+
+// [CORRECTED] OVERRIDE (highest authority): if the OCR tagged a rewritten answer,
+// the surviving letter is the one AFTER the last [CORRECTED] marker — it WINS over
+// whatever Patterns 0-4 picked (which may have grabbed the struck-out first letter).
+if (_hasCorrectedTag) {
+    const _tagIdx = rawOcr.toUpperCase().lastIndexOf('[CORRECTED]');
+    const _afterTag = rawOcr.slice(_tagIdx + '[CORRECTED]'.length);
+    const _pc = _afterTag.match(/\(?\[?([A-Da-d])\]?\)?(?:[)\].\s:,]|$)/);
+    if (_pc) {
+        studentLetter = _pc[1].toUpperCase();
+        console.log(`[MCQ Corrected] Q${qr.questionNumber}: [CORRECTED] surviving letter="${studentLetter}"`);
+    }
+}
+
+// UNTAGGED MULTI-LETTER CORRECTION FALLBACK: a crossed-out-then-rewritten MCQ
+// answer sometimes leaves BOTH the voided first attempt and the real final
+// answer in the transcript with no [CORRECTED] tag — OCR can miss a strikethrough
+// over a full option's worth of text (a long scribble is harder to read as fully
+// cancelled than a single struck letter). Without the tag, Patterns 0-4 above grab
+// whichever letter comes FIRST — exactly the struck-out attempt.
+// Detect this independently of whether OCR tagged it: scan for genuine option-
+// letter markers ("d)", "b)" — the negative lookbehind excludes "(A)"/"(R)"
+// Assertion/Reason labels, which are NOT option markers despite also being single
+// letters in parens). If 2+ DISTINCT such letters appear with no [CORRECTED] tag,
+// trust the LAST one written — corrections come chronologically after mistakes,
+// the same assumption the [CORRECTED] mechanism already makes — and flag for
+// review so a teacher can verify either way.
+let _untaggedMultiLetter = false;
+if (!_hasCorrectedTag) {
+    const _letterMarkers = [...rawOcr.matchAll(/(?<!\()\b([A-Da-d])\)/g)].map(m => m[1].toUpperCase());
+    const _distinctLetters = [...new Set(_letterMarkers)];
+    if (_distinctLetters.length >= 2) {
+        const _lastLetter = _letterMarkers[_letterMarkers.length - 1];
+        console.log(`[MCQ UntaggedCorrection] Q${qr.questionNumber}: multiple distinct letters found (${_distinctLetters.join(',')}) with no [CORRECTED] tag — using last-written "${_lastLetter}", flagging for review`);
+        studentLetter = _lastLetter;
+        _untaggedMultiLetter = true;
+    }
+}
+
+// Shared-text subpart guard:
+// When both Q1(i) and Q1(ii) share the same inherited text block, the patterns
+// above may extract the wrong letter (e.g. picks option "(i)" text as the answer).
+// If this is a subpart question AND Pattern 0 didn't find a clean subpart-anchored
+// letter AND the text contains multiple subpart markers → skip deterministic override,
+// let the LLM result stand (it saw the full question + answer text and is smarter).
+const _hasSharedMultipartText = _extractedSubPart &&
+    !_p0SucceededForSubpart &&
+    /ii[).\s]|iii[).\s]/i.test(rawOcr);
+
+// If pre-resolution stamped a letter (from shared-subpart mini-LLM call), use it.
+if (qr._resolvedMcqLetter) {
+    studentLetter = qr._resolvedMcqLetter;
+    console.log(`[MCQ] Q${qr.questionNumber}: using pre-resolved letter "${studentLetter}"`);
+}
+
+
+
+console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" model="${modelLetter}" subPart="${_extractedSubPart}" p0ok=${_p0SucceededForSubpart} sharedText=${_hasSharedMultipartText} rawOcr="${rawOcr.substring(0,80)}"`);
+
+                    // ── textCorrect RESCUE (RUBRIC: "Full marks if letterCorrect OR textCorrect") ──
+                    // Recover a student who wrote the CORRECT option's TEXT but mislabelled/misread
+                    // the letter (e.g. wrote "LT^-3, LT^-2, LT^-1" but tagged it "d)").
+                    // Matching is TOKEN-SEQUENCE based (not raw substring) so that a distinguishing
+                    // number cannot be ignored: "2π rad/s" must NOT match "π rad/s". LaTeX is
+                    // normalised (\text{ rad}->rad, \pi->pi) so formatting doesn't break the match.
+                    // Guards: correct option must be substantive (>=5 chars, not a single 1-2 char
+                    // token like "1"/"2s"); a bare number immediately before the match is rejected.
+                    // Note: options[] is not stored per question here, so we parse the correct option
+                    // text from the model answer and rely on the token rules above (no distractor list).
+                    let _textCorrect = false;
+                    {
+                        // Mathematically-significant operators are converted to NAMED tokens instead
+                        // of being stripped as noise. Two real failure modes this fixes:
+                        //  1. Set-theory options are often distinguished ONLY by which operator
+                        //     connects the same one/two variable names ("A-B=A-B'" vs "A-(A∩B)" vs
+                        //     "(A∪B)-B") — stripping -, ∩, ∪, ' left EVERY option collapsing to the
+                        //     same bare "a b", making them indistinguishable from each other AND too
+                        //     short to pass the length guard below even for a genuinely exact match
+                        //     (observed: a student who wrote the correct option's exact formula was
+                        //     scored 0 because "a b a b" is only 4 characters).
+                        //  2. Sign-only distinctions ("b=-3" vs "b=+3") vanished entirely once the
+                        //     sign was stripped — a genuinely WRONG answer (flipped sign, e.g. an
+                        //     OCR misread of the sign) could then silently equal the correct option's
+                        //     tokens and be wrongly credited. Keeping +/- as distinct named tokens
+                        //     closes this false-positive risk without touching the letter-match path.
+                        //  3. BRACKET TYPE is equally significant and was missed by the original fix
+                        //     above — "R-{3,-2}" (remove two discrete points), "R-[3,-2]" (remove a
+                        //     closed interval), "R-(3,-2)" (remove an open interval) are three
+                        //     DIFFERENT answers that all collapsed to the same "r minus 3 minus 2"
+                        //     once {}/[] were stripped as noise, so a student's genuinely wrong
+                        //     bracket choice could silently match whichever option happened to be
+                        //     marked correct (observed directly: student wrote "[3,-2]", scored as
+                        //     if they'd written the correct "{3,-2}"). Round brackets are left as
+                        //     plain grouping (stripped) since they are ubiquitously used as pure
+                        //     grouping elsewhere (e.g. "(20/9)(i+2j+2k)") and are not, on their own,
+                        //     a set/interval notation the way {} and [] are.
+                        const _tok = s => String(s || '')
+                            .replace(/\\text\s*\{([^}]*)\}/gi, ' $1 ')
+                            .replace(/\\(?:left|right|displaystyle|mathrm|mathbf|hat|vec|bar|frac|sqrt)\b/gi, ' ')
+                            .replace(/\\([a-zA-Z]+)/g, '$1')      // \pi->pi (kept attached: "2\pi"->"2pi")
+                            .toLowerCase()
+                            .replace(/−/g, '-').replace(/[’′]/g, "'")  // normalize unicode variants first
+                            .replace(/-/g, ' minus ')
+                            .replace(/\+/g, ' plus ')
+                            .replace(/∩/g, ' cap ')
+                            .replace(/∪/g, ' cup ')
+                            .replace(/'/g, ' prime ')
+                            .replace(/⊆/g, ' subseteq ').replace(/⊂/g, ' subset ')
+                            .replace(/≤/g, ' le ').replace(/≥/g, ' ge ')
+                            .replace(/≠/g, ' neq ')
+                            .replace(/\{/g, ' curlyopen ').replace(/\}/g, ' curlyclose ')
+                            .replace(/\[/g, ' squareopen ').replace(/\]/g, ' squareclose ')
+                            // GENERAL FIX (replaces a whack-a-mole pattern of naming one more
+                            // symbol every time a new false-positive is found — brackets, then
+                            // operators, now Greek letters/∅ hit the exact same bug): any symbol
+                            // not explicitly named above is now kept as its OWN token instead of
+                            // being silently deleted as "noise". Concretely: "P∩Q=φ" (correct)
+                            // used to collapse to "p cap q" once φ vanished — a trivial subsequence
+                            // that ANY answer mentioning P∩Q would match regardless of what's on
+                            // the other side of the equals sign, wrongly crediting a student who
+                            // picked the wrong option (wrote "P∩Q=P") as if they'd written the
+                            // correct one. Now φ, ∅, π, and any other un-named symbol survive as
+                            // their own distinguishing token, closing this class of bug generally
+                            // rather than one named exception at a time.
+                            .replace(/([^\sa-z0-9])/g, ' $1 ')
+                            .trim().split(/\s+/).filter(Boolean);
+                        const _correctText = _modelRaw.replace(/^\(?\s*[A-Da-d]\s*[).:\-]*\s*/, '');
+                        const _need = _tok(_correctText);
+                        // Strip structural tags/labels first so the label number (e.g. the "9" in
+                        // "[QLABEL:Ans 9]") is not mistaken for a coefficient before the answer text.
+                        const _hayText = rawOcr
+                            .replace(/\[QLABEL:[^\]]*\]/gi, ' ')
+                            .replace(/\[#P:[^\]]*\]/gi, ' ')
+                            .replace(/\[PAGE[^\]]*\]/gi, ' ')
+                            .replace(/\bAns\.?\s*\d+/gi, ' ');
+                        const _hay  = _tok(_hayText);
+                        const _needChars = _need.join('').length;
+                        const _seqIn = (hay, need) => {
+                            if (!need.length) return false;
+                            for (let i = 0; i + need.length <= hay.length; i++) {
+                                let ok = true;
+                                for (let j = 0; j < need.length; j++) if (hay[i + j] !== need[j]) { ok = false; break; }
+                                // reject "2 pi rad s" matching "pi rad s": a bare number just before wins
+                                if (ok && i > 0 && /^\d+$/.test(hay[i - 1]) && !/^\d/.test(need[0])) ok = false;
+                                if (ok) return true;
+                            }
+                            return false;
+                        };
+                        if (_needChars >= 5 && !(_need.length === 1 && _need[0].length <= 2) && _seqIn(_hay, _need)) {
+                            _textCorrect = true;
+                        }
+                        if (_textCorrect) console.log(`[MCQ textCorrect] Q${qr.questionNumber}: written answer matches correct option ${modelLetter} (letter="${studentLetter || '?'}")`);
+                    }
+
+                    if (modelLetter && (studentLetter || _textCorrect) && (!_hasSharedMultipartText || qr._resolvedMcqLetter)) {
+                        const _letterCorrect = !!studentLetter && (modelLetter === studentLetter);
+                        const isCorrect = _letterCorrect || _textCorrect;
+                        const overrideMarks = isCorrect ? maxMarks : 0;
+                        const overrideFeedback = isCorrect
+                            ? (_letterCorrect
+                                ? `${studentLetter} - Good work.`
+                                : `Correct — your written answer matches option ${modelLetter}. Good work.`)
+                            : `${studentLetter} - Incorrect. Correct answer: ${modelLetter}.`;
+                        // Flag letter/text mismatches for a teacher glance (letter disagreed but text matched),
+                        // plus untagged multi-letter corrections (see fallback above) — both are cases where
+                        // the deterministic letter choice is a best-effort guess, not a certain reading.
+                        const _needsReview = _hasCorrectedTag || _untaggedMultiLetter || (_textCorrect && !_letterCorrect);
+                        console.log(`[MCQ Override] Q${qr.questionNumber}: letterCorrect=${_letterCorrect} textCorrect=${_textCorrect} student="${studentLetter}" model="${modelLetter}" overrideMarks=${overrideMarks} maxMarks=${maxMarks}`);
+const syncedSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
+                            ...step,
+                            marks: i === 0 ? overrideMarks : 0,
+                            comment: i === 0
+                                ? (isCorrect ? '' : 'Incorrect')
+                                : (step.comment || '')
+                        }));
+                        // Flag corrected answers and letter/text mismatches for a teacher glance,
+                        // but keep the awarded marks — do not zero a correctly-read correction.
+                        return { ...qr, marksAwarded: overrideMarks, finalFeedback: overrideFeedback, requiresReview: _needsReview, stepWiseEvaluation: syncedSteps };
+                    }
+
+                    // FALLBACK: studentText was empty (dense MCQ block — Librarian didn't slice it)
+                    // Scan the full transcript for patterns like:
+                    //   "Ans 20: (c)", "Ans20 (c)", "20. c", "20) c", "20 : c"
+const qNum = String(qr.questionNumber).replace(/[^0-9]/g, '').substring(0, 2);
+                    let scannedLetter = '';
+
+                    if (qNum && fullTranscript) {
+                        // Patterns: "Ans N:", "N:", "N.", "N)" followed by optional space and letter
+const scanPatterns = [
+    // "29. (i) d)" — question number, sub-part, then answer
+    new RegExp(`(?:^|\\n)\\s*(?:Ans\\.?\\s*)?${qNum}\\b[.\\s]*(?:\\([ivxIVX]+\\)|[ivxIVX]+[).]\\s*)\\(?([A-Da-d])\\)?`, 'im'),
+    // "Ans 20: (c)" or "Ans20 (c)"
+new RegExp(`Ans\\.?\\s*${qNum}\\b\\s*[:\\-.)]?\\s*\\(?([A-Da-d])\\)?`, 'i'),
+    // "20: c" or "20. c" or "20) c"  
+    new RegExp(`(?:^|\\n)\\s*${qNum}\\b\\s*[:\\-.)]+\\s*\\(?([A-Da-d])\\)?`, 'im'),
+];
+for (const pat of scanPatterns) {
+                            const sm = fullTranscript.match(pat);
+                            if (sm) { scannedLetter = sm[1].toUpperCase(); break; }
+                        }
+
+                        if (scannedLetter && modelLetter) {
+                            const isCorrect = scannedLetter === modelLetter;
+                            const overrideMarks = isCorrect ? maxMarks : 0;
+                            console.log(`[MCQ Scan] Q${qr.questionNumber}: scanned="${scannedLetter}" model="${modelLetter}" isCorrect=${isCorrect}`);
+                            const syncedSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
+                                ...step,
+                                marks: i === 0 ? overrideMarks : 0
+                            }));
+                            return { ...qr, marksAwarded: overrideMarks,
+                                finalFeedback: isCorrect ? `${scannedLetter} - Good work.` : `${scannedLetter} - Incorrect. Correct answer: ${modelLetter}.`,
+                               requiresReview: !isCorrect, stepWiseEvaluation: syncedSteps };
+                        }
+                    }
+
+
+                    console.log(`[MCQ Fallback] Q${qr.questionNumber}: modelLetter="${modelLetter}" studentLetter="${studentLetter}" rawOcr="${rawOcr.substring(0,60)}" type="${qr.type}"`);
+
+                    // Fallback: student letter not extractable — use AI feedback heuristic
+                    const feedbackSaysCorrect = feedback.includes('good work') ||
+                        (feedback.includes('correct') && !feedback.includes('incorrect'));
+                    const feedbackSaysIncorrect = feedback.includes('incorrect') ||
+                        feedback.includes('wrong option') || feedback.includes('wrong answer');
+                    if (feedbackSaysCorrect && awarded === 0 && maxMarks > 0) {
+                        awarded = maxMarks;
+                        console.log('[MCQ Parity] Q' + qr.questionNumber + ': feedback=correct but marks=0 → corrected to ' + maxMarks);
+                    } else if (feedbackSaysIncorrect && awarded > 0 && maxMarks > 0) {
+                        awarded = 0;
+                        console.log('[MCQ Parity] Q' + qr.questionNumber + ': feedback=incorrect but marks=' + awarded + ' → corrected to 0');
+                    }
+                    // Sync steps in fallback path too
+                    const fallbackSteps = (qr.stepWiseEvaluation || []).map((step, i) => ({
+                        ...step,
+                        marks: i === 0 ? awarded : 0
+                    }));
+                   return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback, requiresReview: true, stepWiseEvaluation: fallbackSteps };
+                } // end else (valid modelLetter)
+                }
+                // Case A+B: negative feedback but full marks → flag for teacher review (non-MCQ only)
+                if (hasNegativeSignal && awarded >= maxMarks && maxMarks > 0) {
+                    return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback, requiresReview: true };
+                }
+
+                // Case C: marks deducted but feedback looks positive → sync issue
+                const feedbackLooksPositive = feedback === 'good work.' || feedback === 'good work' || feedback.trim() === '';
+                if (awarded < maxMarks && feedbackLooksPositive && !qr.requiresReview) {
+                    return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback, requiresReview: true };
+                }
+
+                // Flag for review: student attempted but got zero — warrants teacher check
+                const isAttempted = (qr.studentOcrAnswer || qr.studentText || '').trim().length > 10;
+                if (awarded === 0 && maxMarks > 0 && isAttempted && !qr.requiresReview) {
+                    return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback, requiresReview: true };
+                }
+                return { ...qr, marksAwarded: awarded, finalFeedback: cleanedFeedback };
+            });
+            // ─────────────────────────────────────────────────────────────────────────
+const lastPageIndex = Math.max(0, (pagesResult.length || 1) - 1);
+            // ─── REPORT RECONSTRUCTION (UNCHANGED) ──────────────────────────────────
+            const reconstructedReport = questions.map((originalQ) => {
+let pageSet = pageMap.get(originalQ._uid) || new Set();
+                const pageIndices = Array.from(pageSet).map(n => n - 1).sort((a, b) => a - b);
+
+
+
+const gradedResult = questionWiseReport.find(r => r._uid === originalQ._uid);
+
+if (gradedResult) {
+                const { studentText: _dropped, ...gradedClean } = gradedResult;
+                // OCR SELF-VERIFICATION DISAGREEMENT (see verification pass above): grading
+                // already ran on the corrected text, but a disagreement between two independent
+                // reads is ALWAYS surfaced for a human to resolve — never silently trusted either
+                // way, regardless of what the grader itself decided about requiresReview.
+                const _ocrDisagreementNote = originalQ._ocrVerificationDisagreement
+                    ? `\n\n[OCR VERIFICATION DISAGREEMENT — please check against the original answer sheet]\nOriginal OCR read: "${(originalQ._ocrVerificationOriginal || '').substring(0, 300)}"\nVerification re-read: "${(originalQ.studentText || '').substring(0, 300)}"`
+                    : '';
+                return {
+                    ...gradedClean,
+                    requiresReview: gradedResult.requiresReview || !!originalQ._suspectedMislabel || !!originalQ._ocrVerificationDisagreement,
+                    finalFeedback: (gradedClean.finalFeedback || '') + _ocrDisagreementNote,
+                        studentOcrAnswer: originalQ.studentText,
+                        // FIX: never use || 0 — pageIndices[0] can legitimately BE 0 (page 1)
+                        // and 0 || 0 = 0 which is correct by accident, but undefined || 0 = 0
+                        // which silently snaps every question with empty pageIndices to page 1.
+                        // Use -1 (sentinel) when no page is known — frontend hides sentinel questions.
+  answerPageIndex: pageIndices.length > 0 ? pageIndices[0] : lastPageIndex,
+                        answerPageIndices: pageIndices.length > 0 ? pageIndices : [lastPageIndex]
+                    };
+                }
+
+                return {
+                    questionNumber: originalQ.questionNumber,
+                    marksAwarded: 0,
+                    maxMarksForQuestion: originalQ.marks,
+finalFeedback: "Requires manual review — answer not found in OCR.",
+studentOcrAnswer: "Answer not mapped by OCR.",
+answerPageIndex: lastPageIndex,   // unmapped → last page, visible & editable
+answerPageIndices: [lastPageIndex],
+                    requiresReview: true,
+                    stepWiseEvaluation: []
+                };
+            });
+
+            // CLAMP: ensure no question ever gets answerPageIndex < 0
+reconstructedReport.forEach(qr => {
+    if (typeof qr.answerPageIndex !== 'number' || qr.answerPageIndex < 0) {
+        qr.answerPageIndex = lastPageIndex;
+    }
+    if (!Array.isArray(qr.answerPageIndices) || qr.answerPageIndices.some(p => p < 0)) {
+        qr.answerPageIndices = [lastPageIndex];
+    }
+});
+
+
+
+
+           
+
+            // ─── FIX #3: totalMarks safe for both PWA and SaaS ───────────────────────
+            const computedTotalMarks = Number(totalMarks) ||
+                questions.reduce((sum, q) => sum + (Number(q.marks) || 0), 0) || 0;
+
+
+            let reportImageUrls = answerSheetImageUrls;
+if (hasSinglePdf && pagesResult.length > 1) {
+    const pdfUrl = answerSheetImageUrls?.[0] || '';
+    reportImageUrls = pagesResult.map((_, i) => `${pdfUrl}#page=${i + 1}`);
+}
+
+const reportForStudent = {
+    studentName: jobData.studentName || "Student",
+    rollNumber: jobData.rollNumber || "",
+    studentUid,
+                stream: stream || "",
+                overallScore: reconstructedReport.reduce((sum, qr) => sum + (qr.marksAwarded || 0), 0),
+                maximumMarks: computedTotalMarks,
+  overallFeedback: {
+                    summary: "Grading complete.",
+                   areasForImprovement: (() => {
+const conceptual = [];
+
+    reconstructedReport.forEach(qr => {
+        const max = qr.maxMarksForQuestion || 0;
+        const awarded = qr.marksAwarded || 0;
+        if (awarded >= max || max === 0) return; // full marks — skip
+
+        // Use grader-provided topic and category (new fields)
+const topic = (qr.chapterTopic || '').trim();
+        
+        // FIX: If grader did not provide a topic name, skip this question entirely
+        // rather than showing "Q27 — Review Required" in the improvement areas.
+        // Topic-less entries pollute the improvement summary with unhelpful labels.
+        if (!topic) return;
+        const displayTopic = topic;
+const item = {
+            text: displayTopic,
+            questionNumber: qr.questionNumber,
+            marksLost: parseFloat((max - awarded).toFixed(1))
+        };
+
+        conceptual.push(item);
+    });
+
+    const dedup = (arr) => {
+        const seen = new Set();
+        return arr.filter(item => {
+            const key = item.text.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    };
+
+return dedup(conceptual);
+})()
+                },
+
+                // ─── SPRINT 1: DEEP STUDENT INTELLIGENCE ANALYTICS ───────────────────────
+                // All computed deterministically from grading output — zero extra LLM calls.
+                // Powers the comprehensive parent report with 7-category diagnostics.
+                studentIntelligence: (() => {
+
+                    // ── CAT 1: Question-Type Performance ─────────────────────────────────
+                    // How does the student perform across RECALL, NUMERICAL, DERIVATION etc.
+                    const typeStats = {};
+                    reconstructedReport.forEach(qr => {
+                        const qType = (qr.questionType || '').trim();
+                        if (!qType) return;
+                        if (!typeStats[qType]) typeStats[qType] = { scored: 0, max: 0, count: 0 };
+                        typeStats[qType].scored += (qr.marksAwarded || 0);
+                        typeStats[qType].max    += (qr.maxMarksForQuestion || 0);
+                        typeStats[qType].count  += 1;
+                    });
+                    const questionTypePerformance = Object.entries(typeStats).map(([type, s]) => ({
+                        type,
+                        scored: parseFloat(s.scored.toFixed(1)),
+                        max:    s.max,
+                        count:  s.count,
+                        pct:    s.max > 0 ? Math.round((s.scored / s.max) * 100) : 100
+                    })).sort((a, b) => a.pct - b.pct); // worst first
+
+       
+
+
+
+                    // ── SUMMARY SIGNALS ───────────────────────────────────────────────────
+                    const totalMarksInPaper = reconstructedReport.reduce((s, qr) => s + (qr.maxMarksForQuestion || 0), 0);
+                    const totalScored = reconstructedReport.reduce((s, qr) => s + (qr.marksAwarded || 0), 0);
+                    const totalMarksLost = parseFloat((totalMarksInPaper - totalScored).toFixed(1));
+
+                    // Marks lost by question type (teacher-level insight)
+                    const marksLostByType = questionTypePerformance
+                        .filter(t => t.max > t.scored)
+                        .map(t => ({
+                            type: t.type,
+                            marksLost: parseFloat((t.max - t.scored).toFixed(1)),
+                            pct: t.pct
+                        }));
+
+ 
+
+                    // Is this a "strong thinker, weak recall" profile?
+                    const derivationPct = typeStats['DERIVATION']
+                        ? Math.round((typeStats['DERIVATION'].scored / typeStats['DERIVATION'].max) * 100) : null;
+                    const recallPct = typeStats['RECALL']
+                        ? Math.round((typeStats['RECALL'].scored / typeStats['RECALL'].max) * 100) : null;
+                    const numericalPct = typeStats['NUMERICAL']
+                        ? Math.round((typeStats['NUMERICAL'].scored / typeStats['NUMERICAL'].max) * 100) : null;
+
+return {
+                        questionTypePerformance,
+                        summary: {
+                            totalMarksLost,
+                            marksLostByType,
+                            derivationPct,
+                            recallPct,
+                            numericalPct
+                        }
+                    };
+                })(),
+                answerSheetImageUrls,
+                questionWiseReport: reconstructedReport,
+                fullOcrText: fullTranscript,
+                gradingTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+                assessmentId,
+                subject
+            };
+
+            await snapshot.ref.update({ status: 'SUCCESS', currentStep: 4, progress: 100, statusDetails: 'Report Saved!' });
+
+// ─── SAVE RESULT: homework → completedHomeworkSubmissions, exam → assessmentHistory
+          if (jobData.isHomework) {
+    if (!jobData.homeworkSubmissionDocId) {
+        throw new Error(`HOMEWORK_SAVE_FAIL: isHomework=true but homeworkSubmissionDocId is null for job ${jobId}. Report not saved.`);
+    }
+await db.collection('completedHomeworkSubmissions')
+    .doc(jobData.homeworkSubmissionDocId)
+    .set({
+        detailedReport: cleanUndefined(reportForStudent),
+        score: reportForStudent.overallScore,
+        maximumMarks: reportForStudent.maximumMarks,
+        gradedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+} else {
+    const submissionRef = db.collection('teachers')
+        .doc(teacherUid)
+        .collection('assessmentHistory')
+        .doc(assessmentId)
+        .collection('submissions')
+        .doc(studentUid);
+
+    const slimReport = cleanUndefined({
+        studentName: reportForStudent.studentName,
+        studentUid: reportForStudent.studentUid,
+        rollNumber: reportForStudent.rollNumber || '',
+        overallScore: reportForStudent.overallScore,
+        maximumMarks: reportForStudent.maximumMarks,
+        overallFeedback: reportForStudent.overallFeedback,
+        studentKeywords: reportForStudent.studentKeywords || [],
+        answerSheetImageUrls: reportForStudent.answerSheetImageUrls || [],
+        studentIntelligence: reportForStudent.studentIntelligence || null,
+        published: false,
+        requiresReview: reportForStudent.requiresReview || false,
+        gradingTimestamp: reportForStudent.gradingTimestamp,
+        assessmentId: reportForStudent.assessmentId,
+        subject: reportForStudent.subject,
+    });
+
+const detailDoc = cleanUndefined({
+        questionWiseReport: (reportForStudent.questionWiseReport || []).map(qr => {
+            const { studentText: _t, ...rest } = qr;
+            return {
+                ...rest,
+                studentOcrAnswer: (qr.studentOcrAnswer || '').substring(0, 800),
+            };
+        }),
+        fullOcrText: (reportForStudent.fullOcrText || '').substring(0, 50000),
+    });
+
+    await submissionRef.set(slimReport);
+    await submissionRef.collection('detail').doc('report').set(detailDoc);
+    console.log(`[Job ${jobId}] Exam graded — saved split to assessmentHistory`);
+}
+
+            // ─── TRAINING TRACE CAPTURE (immutable Gemini-original snapshot) ──────────
+            // Stores Gemini's ORIGINAL per-question grades to GCS *before* any teacher
+            // edit on the frontend. Firestore reports get edited in place, so without
+            // this we lose the "what Gemini first said" side of every future training
+            // pair. Cost: one small JSON object per copy, off the hot path. Never throws.
+            try {
+                const safeSubject = (subject || 'unknown').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') || 'unknown';
+                const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+                const trace = {
+                    schemaVersion: 1,
+                    capturedAt: new Date().toISOString(),
+                    jobId,
+                    teacherUid,
+                    assessmentId,
+                    studentUid,
+                    subject,
+                    isHomework: !!jobData.isHomework,
+                    answerSheetImageUrls: reportForStudent.answerSheetImageUrls || [], // references, not copies
+                    // Gemini's original output per question (pre human-edit):
+                    questions: (reconstructedReport || []).map(qr => ({
+                        questionNumber: qr.questionNumber,
+                        text: qr.text || '',
+                        model_answer: qr.answer || '',
+                        rubric: qr.rubric || null,
+                        checking_instructions: qr.checkingInstructions || '',
+                        max_marks: qr.maxMarksForQuestion,
+                        type: qr.type || qr.questionType || '',
+                        student_answer_ocr: (qr.studentOcrAnswer || '').slice(0, 6000),
+                        gemini_awarded: qr.marksAwarded,
+                        gemini_step_evaluation: qr.stepWiseEvaluation || [],
+                        gemini_feedback: qr.finalFeedback || ''
+                    }))
+                };
+                const objectPath = `training-traces/${safeSubject}/${day}/${teacherUid}_${assessmentId}_${studentUid}.json`;
+                await storage.bucket().file(objectPath).save(JSON.stringify(trace), {
+                    resumable: false,
+                    contentType: 'application/json'
+                });
+            } catch (traceErr) {
+                console.warn(`[TrainingTrace] capture failed (non-critical): ${traceErr.message}`);
+            }
+            // ─── END TRAINING TRACE CAPTURE ──────────────────────────────────────────
+
+            // Queue doc cleanup — same for both paths
+            await snapshot.ref.delete();
+
+        } catch (error) {
+            console.error(`❌ Grading Job ${jobId} Failed:`, error);
+            await snapshot.ref.update({
+                status: 'ERROR',
+                statusDetails: error.message.includes('LIBRARIAN_') ? 'Stopped: Structural Error'
+                    : error.message.includes('SSRF_BLOCK') ? 'Stopped: Security Block on Image URL'
+                    : error.message.includes('FETCH_FAIL') ? 'Stopped: Could not download student images'
+                    : 'Grading Failed',
+                error: error.message,
+                finishedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+);
+
+
 
 
 
