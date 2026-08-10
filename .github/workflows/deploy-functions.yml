@@ -7,6 +7,7 @@ on:
       - 'vertex-ai-backend/**'
       - 'firebase.json'
       - '.firebaserc'
+  workflow_dispatch: {}
 
 jobs:
   deploy:
