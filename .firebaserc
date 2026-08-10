@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "student-database-74297"
+  },
+  "targets": {
+    "student-database-74297": {
+      "hosting": {
+        "teachers-classmap": [
+          "teachers-classmap"
+        ],
+        "teachersclassmap": [
+          "teachersclassmap"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

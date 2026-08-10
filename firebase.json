@@ -1,0 +1,21 @@
+{
+  "functions": {
+    "source": "vertex-ai-backend",
+    "runtime": "nodejs20"
+  },
+  "hosting": {
+    "target": "teachers-classmap",
+    "public": "teachers-classmap/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
