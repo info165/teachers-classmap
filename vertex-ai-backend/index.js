@@ -2180,7 +2180,7 @@ async function fetchGradingRules(subject) {
 // UNCHANGED from original. Used by both Teacher PWA and SaaS API jobs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections = false) {
+async function extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections = false, queueCollection = 'gradingQueue') {
 
 const totalPages = imageParts.length;
 const masterIds = jobData.questions.map(q => q.questionNumber);
@@ -2267,7 +2267,7 @@ const isPdfJob = imageParts.length > 0 && (
     : { fileData: imageParts[0].fileData }; // GCS URI path
         const totalPdfPages = imageParts.length; // virtual page count set by processGradingJob
 
-        await db.collection('gradingQueue').doc(jobId).update({
+        await db.collection(queueCollection).doc(jobId).update({
             statusDetails: `Reading PDF answer sheet (${totalPdfPages} pages)...`,
             currentStep: 1,
             progress: 5
@@ -2396,7 +2396,7 @@ const segments = normalizedTranscript.split(pageSplitter);
         const recoveredPdfPages = {};
         for (let pg = pdfMarkerCount; pg < totalPdfPages; pg++) {
             const pageNum = pg + 1;
-            await db.collection('gradingQueue').doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
+            await db.collection(queueCollection).doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
             try {
                 const pdfRecoveryModel = vertex_ai.getGenerativeModel({
                     model: ocrModelName,
@@ -2844,7 +2844,7 @@ sanitized = (() => {
             });
             pageResults.push({ pageNum: targetPageNum, text: sanitized, rawText: sanitized, anchors });
 
-            await db.collection('gradingQueue').doc(jobId).update({
+            await db.collection(queueCollection).doc(jobId).update({
                 progress: Math.min(25, Math.round((targetPageNum / totalPdfPages) * 25))
             });
         }
@@ -2866,7 +2866,7 @@ let attempt = 0;
         while (attempt < 1 && !batchSuccess) {
             try {
                 const currentProgress = Math.round(((i + currentBatch.length) / totalPages) * 25);
-                await db.collection('gradingQueue').doc(jobId).update({
+                await db.collection(queueCollection).doc(jobId).update({
                     statusDetails: `Reading Sheets: Page ${i + 1} to ${endRange} (Total: ${totalPages})`,
                     currentStep: 1,
                     progress: Math.min(25, currentProgress)
@@ -3460,7 +3460,7 @@ totalCostInr: (((usage.promptTokenCount - (usage.cachedContentTokenCount || 0)) 
     if (attempt >= 1) {
  for (let subIdx = 0; subIdx < currentBatch.length; subIdx++) {
                         const pageNum = i + subIdx + 1;
-                        await db.collection('gradingQueue').doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
+                        await db.collection(queueCollection).doc(jobId).update({ statusDetails: `Recovery Mode: Reading Page ${pageNum}...` });
 
                         try {
                             const recoveryModel = vertex_ai.getGenerativeModel({
@@ -3505,7 +3505,7 @@ generationConfig: {
 // UNCHANGED from original.
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function gradeQuestionBatch(ocrText, questionBatch, strictness, subject, jobId, allRules, diagramImageParts = [], jobData = null, allQuestions = null) {
+async function gradeQuestionBatch(ocrText, questionBatch, strictness, subject, jobId, allRules, diagramImageParts = [], jobData = null, allQuestions = null, queueCollection = 'gradingQueue') {
 
     // Use the subject-aware addon router instead of the old binary isHindi/isLit check.
     // getSubjectAddon() returns ~150 tokens of focused subject context.
@@ -3527,7 +3527,7 @@ const numericalTableGradingAddon = NUMERICAL_TABLE_GRADING_ADDON;
     const ragInstructions = gradingRules.map(r => `- RULE: ${r.correctionRule}`).join('\n');
 
     const questionNumbers = questionBatch.map(q => q.questionNumber).join(', ');
-    await db.collection('gradingQueue').doc(jobId).set({ statusDetails: `Step 2/3: Grading questions ${questionNumbers}...` }, { merge: true });
+    await db.collection(queueCollection).doc(jobId).set({ statusDetails: `Step 2/3: Grading questions ${questionNumbers}...` }, { merge: true });
 
     const fullSystemInstruction = `
     ${GRADING_SYSTEM_INSTRUCTION}
@@ -8182,7 +8182,7 @@ if (!imageParts || imageParts.length === 0) {
             }
 
             // ─── OCR (UNCHANGED) ─────────────────────────────────────────────────────
-const pagesResult = await extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections);
+const pagesResult = await extractTextFromImages(imageParts, subject, jobId, jobData, allRules, hasSections, 'gradingQueueHindiTest');
 const masterIds = questions.map(q => q.questionNumber);
 const fullTranscript = stripCoverPageArtifacts(sanitizeQLabelTranscript(pagesResult.map(p => `[PAGE ${p.pageNum}]\n${p.text}`).join('\n\n'), masterIds));
 
@@ -9508,7 +9508,7 @@ Use null for fields that do not apply. If you cannot determine anything for a su
 
             const batchResult = await gradeQuestionBatch(
                     slicedTranscript,
-                    batch, strictness, subject, jobId, allRules, diagramImageParts, jobData, questions
+                    batch, strictness, subject, jobId, allRules, diagramImageParts, jobData, questions, 'gradingQueueHindiTest'
                 );
 questionWiseReport.push(...batchResult.map(qr => {
                     const usedYByPage = new Map(); // page -> Set of y already assigned (dedup tracker)
