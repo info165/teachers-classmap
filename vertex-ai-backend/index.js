@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { Resolver } = require('dns').promises;
 const sharp = require('sharp');
 const AdmZip = require('adm-zip');
+const { PDFDocument } = require('pdf-lib');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INITIALIZATION
@@ -2261,6 +2262,59 @@ async function sarvamRunDigitiseJob(fileBuffer, filename, apiKey, opts = {}) {
         jobId: job.job_id,
         usage: lastStatusPayload.usage || null,
         status
+    };
+}
+
+const SARVAM_MAX_PAGES_PER_JOB = 10;
+
+// Digitises a PDF of ANY length by splitting it into <=10-page chunks (Sarvam's
+// hard limit per job), running one Digitise job per chunk, and merging the
+// resulting Markdown back into a single transcript in page order. For a PDF
+// that already fits in one chunk, this is a single Sarvam call, same as before.
+async function sarvamDigitiseFullDocument(fileBuffer, apiKey, opts = {}) {
+    const { language = 'hi-IN', outputFormat = 'md', perChunkTimeoutMs = 200000 } = opts;
+
+    const srcDoc = await PDFDocument.load(fileBuffer);
+    const totalPages = srcDoc.getPageCount();
+
+    const chunkRanges = [];
+    for (let start = 0; start < totalPages; start += SARVAM_MAX_PAGES_PER_JOB) {
+        chunkRanges.push([start, Math.min(start + SARVAM_MAX_PAGES_PER_JOB, totalPages)]);
+    }
+
+    const chunkResults = [];
+    for (const [start, end] of chunkRanges) {
+        const chunkDoc = await PDFDocument.create();
+        const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+        const copiedPages = await chunkDoc.copyPages(srcDoc, pageIndices);
+        copiedPages.forEach(p => chunkDoc.addPage(p));
+        const chunkBytes = Buffer.from(await chunkDoc.save());
+
+        const result = await sarvamRunDigitiseJob(
+            chunkBytes, `chunk-pages-${start + 1}-${end}.pdf`, apiKey,
+            { language, outputFormat, timeoutMs: perChunkTimeoutMs }
+        );
+        chunkResults.push({ ...result, startPage: start + 1, endPage: end });
+    }
+
+    const mergedMarkdown = chunkResults
+        .map(r => `<!-- Sarvam OCR — source pages ${r.startPage}-${r.endPage} -->\n\n${r.markdown}`)
+        .join('\n\n');
+
+    const mergedUsage = chunkResults.reduce((acc, r) => {
+        const u = r.usage || {};
+        return {
+            pages_total: (acc.pages_total || 0) + (u.pages_total || 0),
+            pages_succeeded: (acc.pages_succeeded || 0) + (u.pages_succeeded || 0),
+            pages_failed: (acc.pages_failed || 0) + (u.pages_failed || 0)
+        };
+    }, {});
+
+    return {
+        markdown: mergedMarkdown,
+        chunkCount: chunkResults.length,
+        sarvamJobIds: chunkResults.map(r => r.jobId),
+        usage: mergedUsage
     };
 }
 
@@ -10596,11 +10650,13 @@ const detailDoc = cleanUndefined({
 // Results go to sarvamPipelineResults/{jobId}, not the real report tree —
 // this never writes anywhere a teacher-facing view reads from.
 //
-// INPUT LIMIT: Sarvam Digitise caps PDFs at 10 pages — filePaths must contain
-// exactly one PDF of 10 pages or fewer.
+// INPUT: filePaths must contain exactly one PDF, any length — Sarvam's
+// 10-page-per-job cap is handled transparently by sarvamDigitiseFullDocument,
+// which splits into <=10-page chunks, runs one Digitise job per chunk, and
+// merges the Markdown back into a single transcript in page order.
 // ─────────────────────────────────────────────────────────────────────────────
 exports.processGradingJobHindiSarvamTest = onDocumentCreated(
-    { document: "gradingQueueHindiSarvamTest/{jobId}", timeoutSeconds: 400, memory: "1GiB", region: "us-central1", concurrency: 1, secrets: [SARVAM_API_KEY] },
+    { document: "gradingQueueHindiSarvamTest/{jobId}", timeoutSeconds: 540, memory: "1GiB", region: "us-central1", concurrency: 1, secrets: [SARVAM_API_KEY] },
     async (event) => {
         const snapshot = event.data;
         if (!snapshot) return;
@@ -10612,17 +10668,17 @@ exports.processGradingJobHindiSarvamTest = onDocumentCreated(
             await snapshot.ref.update({ status: 'RUNNING', statusDetails: 'Uploading to Sarvam Document AI...' });
 
             if (!filePaths || filePaths.length !== 1) {
-                throw new Error('SARVAM_TEST_INPUT: this test pipeline expects exactly one PDF in filePaths (Sarvam Digitise: max 10 pages per file).');
+                throw new Error('SARVAM_TEST_INPUT: this test pipeline expects exactly one PDF in filePaths.');
             }
             const bucket = storage.bucket();
             const [pdfBuffer] = await bucket.file(filePaths[0]).download();
 
-            const { markdown, usage, jobId: sarvamJobId } = await sarvamRunDigitiseJob(
-                pdfBuffer, 'answer-sheet.pdf', SARVAM_API_KEY.value(), { language: 'hi-IN', outputFormat: 'md' }
+            const { markdown, usage, chunkCount, sarvamJobIds } = await sarvamDigitiseFullDocument(
+                pdfBuffer, SARVAM_API_KEY.value(), { language: 'hi-IN', outputFormat: 'md' }
             );
 
             await snapshot.ref.update({
-                statusDetails: `Sarvam OCR complete (${usage?.pages_succeeded ?? '?'}/${usage?.pages_total ?? '?'} pages) — grading with Gemini 2.5 Flash...`
+                statusDetails: `Sarvam OCR complete across ${chunkCount} chunk(s) (${usage?.pages_succeeded ?? '?'}/${usage?.pages_total ?? '?'} pages) — grading with Gemini 2.5 Flash...`
             });
 
             const gradedResults = await gradeWholeDocumentAgainstSarvamOcr(markdown, questions, subject, jobData);
@@ -10633,7 +10689,8 @@ exports.processGradingJobHindiSarvamTest = onDocumentCreated(
                 totalMarks: totalMarks || questions.reduce((s, q) => s + (q.marks || 0), 0),
                 overallScore: totalAwarded,
                 ocrProvider: 'sarvam-vision-1.5',
-                sarvamJobId,
+                sarvamChunkCount: chunkCount,
+                sarvamJobIds,
                 sarvamUsage: usage || null,
                 gradingModel: 'gemini-2.5-flash',
                 sarvamRawMarkdown: markdown,
