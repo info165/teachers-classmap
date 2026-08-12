@@ -3,11 +3,13 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { defineSecret } = require("firebase-functions/params");
 const { VertexAI } = require('@google-cloud/vertexai');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { Resolver } = require('dns').promises;
 const sharp = require('sharp');
+const AdmZip = require('adm-zip');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INITIALIZATION
@@ -15,6 +17,11 @@ const sharp = require('sharp');
 
 admin.initializeApp();
 let vertex_ai = new VertexAI({ project: process.env.GCLOUD_PROJECT, location: 'us-central1' });
+
+// Sarvam Document AI key — used ONLY by processGradingJobHindiSarvamTest (a
+// standalone Hindi-OCR comparison test, see that function for details). Set
+// via `firebase functions:secrets:set SARVAM_API_KEY`, never a plain env var.
+const SARVAM_API_KEY = defineSecret('SARVAM_API_KEY');
 
 
 const db = admin.firestore();
@@ -2173,6 +2180,167 @@ async function fetchGradingRules(subject) {
         console.warn("[RAG] Fetch Error:", e.message);
         return [];
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SARVAM DOCUMENT AI — OCR via Sarvam Vision 1.5 ("Digitise" endpoint)
+// Used ONLY by processGradingJobHindiSarvamTest, a standalone comparison test.
+// Not called by processGradingJob or processGradingJobHindiTest — the Gemini
+// OCR path in extractTextFromImages is completely untouched by this section.
+// Digitise is a managed document pipeline (no temperature/thinking-budget
+// knobs to set), but is async: submit → poll → download a ZIP of the output.
+// ─────────────────────────────────────────────────────────────────────────────
+const SARVAM_API_BASE = 'https://api.sarvam.ai';
+
+async function sarvamDigitise(fileBuffer, filename, apiKey, language, outputFormat) {
+    const form = new FormData();
+    form.append('file', new Blob([fileBuffer]), filename);
+    form.append('language', language);
+    form.append('output_format', outputFormat);
+    const res = await fetch(`${SARVAM_API_BASE}/doc-ai/v1/job/digitise`, {
+        method: 'POST',
+        headers: { 'api-subscription-key': apiKey },
+        body: form
+    });
+    if (!res.ok) throw new Error(`SARVAM_DIGITISE_FAIL: ${res.status} ${await res.text()}`);
+    return res.json(); // { job_id, status, ... }
+}
+
+async function sarvamPollStatus(jobId, apiKey) {
+    const res = await fetch(`${SARVAM_API_BASE}/doc-ai/v1/job/${jobId}/status`, {
+        headers: { 'api-subscription-key': apiKey }
+    });
+    if (!res.ok) throw new Error(`SARVAM_STATUS_FAIL: ${res.status} ${await res.text()}`);
+    return res.json();
+}
+
+async function sarvamGetDownloadUrl(jobId, apiKey) {
+    const res = await fetch(`${SARVAM_API_BASE}/doc-ai/v1/job/${jobId}/download-url`, {
+        headers: { 'api-subscription-key': apiKey }
+    });
+    if (!res.ok) throw new Error(`SARVAM_DOWNLOAD_URL_FAIL: ${res.status} ${await res.text()}`);
+    return res.json(); // { method, url }
+}
+
+// Runs a full Digitise job to completion and returns the extracted Markdown text.
+async function sarvamRunDigitiseJob(fileBuffer, filename, apiKey, opts = {}) {
+    const { language = 'hi-IN', outputFormat = 'md', pollMs = 4000, timeoutMs = 240000 } = opts;
+    const job = await sarvamDigitise(fileBuffer, filename, apiKey, language, outputFormat);
+    const TERMINAL = new Set(['completed', 'partially_completed', 'failed', 'rejected']);
+    const start = Date.now();
+    let status = job.status;
+    let lastStatusPayload = job;
+    while (!TERMINAL.has((status || '').toLowerCase())) {
+        if (Date.now() - start > timeoutMs) {
+            throw new Error(`SARVAM_JOB_TIMEOUT: job ${job.job_id} did not finish within ${timeoutMs}ms`);
+        }
+        await sleep(pollMs);
+        lastStatusPayload = await sarvamPollStatus(job.job_id, apiKey);
+        status = lastStatusPayload.status;
+    }
+    const statusLower = status.toLowerCase();
+    if (statusLower === 'failed' || statusLower === 'rejected') {
+        throw new Error(`SARVAM_JOB_${status.toUpperCase()}: job ${job.job_id}`);
+    }
+
+    const { url } = await sarvamGetDownloadUrl(job.job_id, apiKey);
+    const zipRes = await fetch(url);
+    if (!zipRes.ok) throw new Error(`SARVAM_ZIP_DOWNLOAD_FAIL: ${zipRes.status}`);
+    const zipBuffer = Buffer.from(await zipRes.arrayBuffer());
+
+    const zip = new AdmZip(zipBuffer);
+    const entries = zip.getEntries();
+    const outputEntry = entries.find(e => e.entryName.toLowerCase().endsWith('.md'))
+                      || entries.find(e => e.entryName.toLowerCase().endsWith('.html'));
+    if (!outputEntry) {
+        throw new Error(`SARVAM_ZIP_NO_OUTPUT_FILE: entries=${entries.map(e => e.entryName).join(', ')}`);
+    }
+
+    return {
+        markdown: outputEntry.getData().toString('utf8'),
+        jobId: job.job_id,
+        usage: lastStatusPayload.usage || null,
+        status
+    };
+}
+
+// Whole-document grading: Sarvam's output has no [QLABEL]/[#P] tags for the
+// existing librarian to slice on, so Gemini receives the full transcript plus
+// the full question list in one call and matches answers to questions itself.
+async function gradeWholeDocumentAgainstSarvamOcr(markdownText, questions, subject, jobData) {
+    const isHindi = isHindiLanguage(jobData);
+    const dynamicInstructions = isHindi ? HINDI_GRADING_ADDON : getSubjectAddon(subject);
+
+    const questionsBlock = questions.map(q =>
+        `Q${q.questionNumber} [${q.marks} mark(s)]: ${q.text}\nModel Answer: ${q.answer}`
+    ).join('\n\n');
+
+    const fullSystemInstruction = `
+    ${GRADING_SYSTEM_INSTRUCTION}
+
+    === CONTEXT FOR THIS GRADING TASK ===
+    SUBJECT: "${subject}"
+
+    === SUBJECT-SPECIFIC NOTES ===
+    ${dynamicInstructions}
+
+    === TASK ===
+    Below is the FULL OCR transcript of a student's answer sheet — every page, digitized by
+    a third-party OCR service (Sarvam Document AI), NOT pre-sliced per question and containing
+    no question-boundary tags. Find each question's answer yourself by matching content in the
+    transcript to the question list below (by question number where the transcript states one,
+    otherwise by content), then grade it. If a question's answer genuinely cannot be found in
+    the transcript, award 0 and say so in finalFeedback rather than guessing.
+
+    QUESTIONS:
+    ${questionsBlock}
+
+    OUTPUT FORMAT: Single valid JSON array, exactly one entry per question number above. No text outside the array.
+    `;
+
+    const responseSchema = {
+        type: "array",
+        items: {
+            type: "object",
+            properties: {
+                questionNumber: { type: "string" },
+                marksAwarded: { type: "number" },
+                maxMarksForQuestion: { type: "number" },
+                requiresReview: { type: "boolean" },
+                finalFeedback: { type: "string" },
+                matchedTranscriptExcerpt: {
+                    type: "string",
+                    description: "The exact portion of the transcript you identified as this question's answer, verbatim."
+                }
+            },
+            required: ["questionNumber", "marksAwarded", "maxMarksForQuestion", "requiresReview", "finalFeedback", "matchedTranscriptExcerpt"]
+        }
+    };
+
+    const request = {
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: `FULL OCR TRANSCRIPT (Sarvam Document AI, Markdown):\n\n${markdownText}` }] }],
+        systemInstruction: { parts: [{ text: fullSystemInstruction }] },
+        generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.0,
+            seed: 42,
+            candidateCount: 1,
+            topP: 0,
+            responseSchema,
+            thinkingConfig: { thinkingBudget: 512 }
+        }
+    };
+
+    const gradingModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const result = await callGeminiWithRetry(gradingModel, request);
+    const parts_arr = result.response.candidates[0].content.parts;
+    const rawJson = (parts_arr.find(p => p.text && !p.thought) || parts_arr[parts_arr.length - 1]).text;
+    const parsed = extractJsonFromString(rawJson);
+    if (!Array.isArray(parsed)) {
+        throw new Error('SARVAM_PIPELINE_GRADING_FAIL: expected JSON array from grader.');
+    }
+    return parsed;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10408,6 +10576,84 @@ const detailDoc = cleanUndefined({
     }
 );
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST TRIGGER: processGradingJobHindiSarvamTest
+//
+// Compares OCR providers on Hindi handwriting: Sarvam Vision 1.5 (Document AI
+// "Digitise" endpoint) does the OCR here; Gemini 2.5 Flash still does the
+// grading — same grader as everywhere else — so any scoring difference from
+// processGradingJobHindiTest reflects the OCR step, not the grader.
+//
+// WHOLE-DOCUMENT GRADING: Sarvam's Digitise output has no [QLABEL]/[#P] tags,
+// so the existing librarian (deterministicBoundaryResolver, gapSpanPositionalAssignment)
+// cannot run against it. Gemini receives the full transcript + full question
+// list in one call and matches answers to questions itself, rather than
+// grading pre-sliced per-question text. See gradeWholeDocumentAgainstSarvamOcr.
+//
+// FULLY ISOLATED: does not call extractTextFromImages, gradeQuestionBatch, or
+// any other function shared with processGradingJob / processGradingJobHindiTest.
+// Results go to sarvamPipelineResults/{jobId}, not the real report tree —
+// this never writes anywhere a teacher-facing view reads from.
+//
+// INPUT LIMIT: Sarvam Digitise caps PDFs at 10 pages — filePaths must contain
+// exactly one PDF of 10 pages or fewer.
+// ─────────────────────────────────────────────────────────────────────────────
+exports.processGradingJobHindiSarvamTest = onDocumentCreated(
+    { document: "gradingQueueHindiSarvamTest/{jobId}", timeoutSeconds: 400, memory: "1GiB", region: "us-central1", concurrency: 1, secrets: [SARVAM_API_KEY] },
+    async (event) => {
+        const snapshot = event.data;
+        if (!snapshot) return;
+        const jobId = event.params.jobId;
+        const jobData = snapshot.data();
+        const { teacherUid, studentUid, assessmentId, filePaths, questions, subject, totalMarks } = jobData;
+
+        try {
+            await snapshot.ref.update({ status: 'RUNNING', statusDetails: 'Uploading to Sarvam Document AI...' });
+
+            if (!filePaths || filePaths.length !== 1) {
+                throw new Error('SARVAM_TEST_INPUT: this test pipeline expects exactly one PDF in filePaths (Sarvam Digitise: max 10 pages per file).');
+            }
+            const bucket = storage.bucket();
+            const [pdfBuffer] = await bucket.file(filePaths[0]).download();
+
+            const { markdown, usage, jobId: sarvamJobId } = await sarvamRunDigitiseJob(
+                pdfBuffer, 'answer-sheet.pdf', SARVAM_API_KEY.value(), { language: 'hi-IN', outputFormat: 'md' }
+            );
+
+            await snapshot.ref.update({
+                statusDetails: `Sarvam OCR complete (${usage?.pages_succeeded ?? '?'}/${usage?.pages_total ?? '?'} pages) — grading with Gemini 2.5 Flash...`
+            });
+
+            const gradedResults = await gradeWholeDocumentAgainstSarvamOcr(markdown, questions, subject, jobData);
+            const totalAwarded = gradedResults.reduce((s, r) => s + (Number(r.marksAwarded) || 0), 0);
+
+            await db.collection('sarvamPipelineResults').doc(jobId).set({
+                teacherUid, studentUid, assessmentId, subject,
+                totalMarks: totalMarks || questions.reduce((s, q) => s + (q.marks || 0), 0),
+                overallScore: totalAwarded,
+                ocrProvider: 'sarvam-vision-1.5',
+                sarvamJobId,
+                sarvamUsage: usage || null,
+                gradingModel: 'gemini-2.5-flash',
+                sarvamRawMarkdown: markdown,
+                questionWiseReport: gradedResults,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            await snapshot.ref.update({ status: 'SUCCESS', statusDetails: 'Sarvam-OCR comparison test complete.', progress: 100 });
+
+        } catch (error) {
+            console.error(`❌ Sarvam Hindi Test Job ${jobId} Failed:`, error);
+            await snapshot.ref.update({
+                status: 'ERROR',
+                statusDetails: 'Sarvam pipeline test failed',
+                error: error.message,
+                finishedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+);
 
 
 
