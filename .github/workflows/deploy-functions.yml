@@ -2,7 +2,7 @@ name: Deploy Cloud Functions
 
 on:
   push:
-    branches: [main, hindi-language-support]
+    branches: [main, hindi-language-support, claude/hindi-language-support-y701g8]
     paths:
       - 'vertex-ai-backend/**'
       - 'firebase.json'
@@ -40,8 +40,8 @@ jobs:
         # Update this list if index.js gains/loses an export.
         run: npx firebase-tools deploy --only functions:processGradingJob,functions:getHomeworkSubmissionReport,functions:extractAssessmentQuestions --project student-database-74297 --non-interactive
 
-      - name: Deploy Hindi test function only (hindi-language-support branch)
-        if: github.ref == 'refs/heads/hindi-language-support'
+      - name: Deploy Hindi test functions only (Hindi support branches)
+        if: github.ref == 'refs/heads/hindi-language-support' || github.ref == 'refs/heads/claude/hindi-language-support-y701g8'
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa-key.json
-        run: npx firebase-tools deploy --only functions:processGradingJobHindiTest --project student-database-74297 --non-interactive
+        run: npx firebase-tools deploy --only functions:processGradingJobHindiTest,functions:processGradingJobHindiSarvamTest,functions:processGradingHindiSarvamProd --project student-database-74297 --non-interactive
