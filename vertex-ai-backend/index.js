@@ -10712,6 +10712,177 @@ exports.processGradingJobHindiSarvamTest = onDocumentCreated(
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PRODUCTION Hindi grading via Sarvam OCR — exports.processGradingHindiSarvamProd
+//
+// Triggered by gradingQueueHindiProd/{jobId} — a collection distinct from the
+// production English gradingQueue/{jobId} (processGradingJob, untouched by this
+// addition) and from the earlier gradingQueueHindiSarvamTest (which writes to a
+// throwaway sarvamPipelineResults collection for local test scripts only).
+//
+// This function shares NO code with processGradingJob, extractTextFromImages, or
+// gradeQuestionBatch — it reuses only sarvamDigitiseFullDocument and
+// gradeWholeDocumentAgainstSarvamOcr, both already isolated additions used
+// exclusively by the Sarvam test pipeline above. It writes results into the SAME
+// Firestore shape processGradingJob writes (teachers/{uid}/assessmentHistory/
+// {assessmentId}/submissions/{studentUid} + detail/report), so the existing
+// teacher-app report page renders it with no frontend changes beyond routing the
+// job here in the first place.
+//
+// SCOPE (v1): exam/assessment grading only. Homework submissions use a different
+// storage shape (completedHomeworkSubmissions) not yet wired up here — a
+// homework job fails loudly with a clear error rather than writing to the wrong
+// place silently.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function combineImagesIntoSinglePdf(files) {
+    const pdfDoc = await PDFDocument.create();
+    for (const { buffer, mimeType } of files) {
+        const isPng = (mimeType || '').toLowerCase().includes('png');
+        const img = isPng ? await pdfDoc.embedPng(buffer) : await pdfDoc.embedJpg(buffer);
+        const page = pdfDoc.addPage([img.width, img.height]);
+        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+    }
+    return Buffer.from(await pdfDoc.save());
+}
+
+function guessImageMimeType(pathOrUrl) {
+    const clean = (pathOrUrl || '').toLowerCase().split('?')[0];
+    return clean.endsWith('.png') ? 'image/png' : 'image/jpeg';
+}
+
+async function resolveAnswerSheetPdfBuffer(jobData) {
+    const bucket = storage.bucket();
+    const filePaths = jobData.filePaths || [];
+    const imageUrls = jobData.answerSheetImageUrls || [];
+
+    if (filePaths.length === 1 && filePaths[0].toLowerCase().endsWith('.pdf')) {
+        const [buf] = await bucket.file(filePaths[0]).download();
+        return buf;
+    }
+
+    if (filePaths.length >= 1) {
+        const files = await Promise.all(filePaths.map(async (p) => {
+            const [buffer] = await bucket.file(p).download();
+            return { buffer, mimeType: guessImageMimeType(p) };
+        }));
+        return combineImagesIntoSinglePdf(files);
+    }
+
+    if (imageUrls.length >= 1) {
+        const files = await Promise.all(imageUrls.map(async (url) => {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`SARVAM_PROD_INPUT: failed to fetch ${url} (${resp.status})`);
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            return { buffer, mimeType: guessImageMimeType(url) };
+        }));
+        return combineImagesIntoSinglePdf(files);
+    }
+
+    throw new Error('SARVAM_PROD_INPUT: no filePaths or answerSheetImageUrls on this job.');
+}
+
+exports.processGradingHindiSarvamProd = onDocumentCreated(
+    { document: "gradingQueueHindiProd/{jobId}", timeoutSeconds: 540, memory: "1GiB", region: "us-central1", concurrency: 1, secrets: [SARVAM_API_KEY] },
+    async (event) => {
+        const snapshot = event.data;
+        if (!snapshot) return;
+        const jobId = event.params.jobId;
+        const jobData = snapshot.data();
+        const {
+            teacherUid, studentUid, studentName, rollNumber, assessmentId,
+            questions, subject, totalMarks, isHomework
+        } = jobData;
+
+        try {
+            if (isHomework) {
+                throw new Error('SARVAM_PROD_SCOPE: homework grading is not yet supported on the Sarvam pipeline — this job was not processed.');
+            }
+
+            await snapshot.ref.update({ status: 'RUNNING', statusDetails: 'Uploading to Sarvam Document AI...' });
+
+            const pdfBuffer = await resolveAnswerSheetPdfBuffer(jobData);
+
+            const { markdown, usage, chunkCount, sarvamJobIds } = await sarvamDigitiseFullDocument(
+                pdfBuffer, SARVAM_API_KEY.value(), { language: 'hi-IN', outputFormat: 'md' }
+            );
+
+            await snapshot.ref.update({
+                statusDetails: `Sarvam OCR complete across ${chunkCount} chunk(s) (${usage?.pages_succeeded ?? '?'}/${usage?.pages_total ?? '?'} pages) — grading with Gemini 2.5 Flash...`
+            });
+
+            const gradedResults = await gradeWholeDocumentAgainstSarvamOcr(markdown, questions, subject, jobData);
+            const totalAwarded = gradedResults.reduce((s, r) => s + (Number(r.marksAwarded) || 0), 0);
+            const maximumMarks = totalMarks || questions.reduce((s, q) => s + (q.marks || 0), 0);
+            const anyRequiresReview = gradedResults.some(r => r.requiresReview);
+
+            const questionByNumber = new Map(questions.map(q => [String(q.questionNumber), q]));
+            const questionWiseReport = gradedResults.map(r => {
+                const orig = questionByNumber.get(String(r.questionNumber).replace(/^Q/i, '')) || {};
+                return {
+                    questionNumber: r.questionNumber,
+                    marks: orig.marks ?? r.maxMarksForQuestion,
+                    type: orig.type || 'SA',
+                    text: orig.text || '',
+                    answer: orig.answer || '',
+                    checkingInstructions: orig.checkingInstructions || '',
+                    rubric: orig.rubric || null,
+                    marksAwarded: r.marksAwarded,
+                    maxMarksForQuestion: r.maxMarksForQuestion,
+                    requiresReview: !!r.requiresReview,
+                    finalFeedback: r.finalFeedback || '',
+                    studentOcrAnswer: r.matchedTranscriptExcerpt || '',
+                };
+            });
+
+            const areasForImprovement = questionWiseReport
+                .filter(q => (q.marksAwarded || 0) < (q.maxMarksForQuestion || 0))
+                .map(q => ({
+                    text: (q.text || '').slice(0, 60),
+                    questionNumber: q.questionNumber,
+                    marksLost: (q.maxMarksForQuestion || 0) - (q.marksAwarded || 0),
+                }));
+
+            const submissionRef = db.collection('teachers').doc(teacherUid)
+                .collection('assessmentHistory').doc(assessmentId)
+                .collection('submissions').doc(studentUid);
+
+            await submissionRef.set({
+                studentName: studentName || 'Student',
+                studentUid,
+                rollNumber: rollNumber || '',
+                overallScore: totalAwarded,
+                maximumMarks,
+                overallFeedback: { summary: 'Grading complete.', areasForImprovement },
+                studentKeywords: [],
+                answerSheetImageUrls: [],
+                published: false,
+                requiresReview: anyRequiresReview,
+                gradingTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+                assessmentId,
+                subject,
+                ocrProvider: 'sarvam-vision-1.5',
+                gradingModel: 'gemini-2.5-flash',
+            }, { merge: true });
+
+            await submissionRef.collection('detail').doc('report').set({
+                questionWiseReport,
+                fullOcrText: markdown,
+            }, { merge: true });
+
+            await snapshot.ref.update({ status: 'SUCCESS', statusDetails: 'Grading complete.', progress: 100 });
+
+        } catch (error) {
+            console.error(`❌ Sarvam Hindi Prod Job ${jobId} Failed:`, error);
+            await snapshot.ref.update({
+                status: 'ERROR',
+                statusDetails: 'Hindi (Sarvam) grading failed',
+                error: error.message,
+                finishedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+);
 
 
 

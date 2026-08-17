@@ -38,4 +38,4 @@ jobs:
         if: github.ref == 'refs/heads/hindi-language-support' || github.ref == 'refs/heads/claude/hindi-language-support-y701g8'
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa-key.json
-        run: npx firebase-tools deploy --only functions:processGradingJobHindiTest,functions:processGradingJobHindiSarvamTest --project student-database-74297 --non-interactive
+        run: npx firebase-tools deploy --only functions:processGradingJobHindiTest,functions:processGradingJobHindiSarvamTest,functions:processGradingHindiSarvamProd --project student-database-74297 --non-interactive
