@@ -32,7 +32,13 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa-key.json
-        run: npx firebase-tools deploy --only functions --project student-database-74297 --non-interactive
+        # Scoped to the exact functions this repo's index.js exports (not the blanket
+        # `--only functions`, which tries to delete anything live-but-not-in-source and
+        # aborts in non-interactive mode). Production currently also has functions this
+        # repo doesn't know about (processStudentGradingJob, processGradingHindiSarvamProd,
+        # processGradingJobHindiSarvamTest, callVertexAI) — deliberately left untouched here.
+        # Update this list if index.js gains/loses an export.
+        run: npx firebase-tools deploy --only functions:processGradingJob,functions:getHomeworkSubmissionReport,functions:extractAssessmentQuestions --project student-database-74297 --non-interactive
 
       - name: Deploy Hindi test function only (hindi-language-support branch)
         if: github.ref == 'refs/heads/hindi-language-support'
