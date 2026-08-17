@@ -7834,23 +7834,6 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             .replace(/≠/g, ' neq ')
                             .replace(/\{/g, ' curlyopen ').replace(/\}/g, ' curlyclose ')
                             .replace(/\[/g, ' squareopen ').replace(/\]/g, ' squareclose ')
-                            // LATEX/TYPOGRAPHIC NOISE STRIP (found via real auditLog case,
-                            // 2026-08-17): a bare backslash (LaTeX escape leftover after the
-                            // named-command replacements above already ran), round brackets, and
-                            // commas carry no distinguishing meaning of their own — they're
-                            // formatting, not content. Without this, two answers with identical
-                            // math content but different LaTeX delimiter-wrapping style (model
-                            // answer "\\(LT^{-3}, LT^{-2}, LT^{-1}\\)" wrapped ONCE around the
-                            // whole triple, vs a student writing "\\(LT^{-3}\\), \\(LT^{-2}\\),
-                            // \\(LT^{-1}\\)" wrapped once PER TERM) produce different token
-                            // sequences and fail to match despite being the same answer —
-                            // confirmed via 3 real students, same question, all under-credited by
-                            // the deterministic path before this fix (auditLogs: XI_UT-1_Physics
-                            // Q5). This restores the already-documented original intent for round
-                            // brackets ("left as plain grouping") that the GENERAL FIX below
-                            // accidentally undid by preserving them as literal tokens along with
-                            // everything else.
-                            .replace(/\\/g, ' ').replace(/[(),]/g, ' ')
                             // GENERAL FIX (replaces a whack-a-mole pattern of naming one more
                             // symbol every time a new false-positive is found — brackets, then
                             // operators, now Greek letters/∅ hit the exact same bug): any symbol
