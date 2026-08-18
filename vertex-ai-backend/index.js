@@ -7134,6 +7134,62 @@ If it does NOT match, respond with ONLY the FULL corrected transcription, start 
             }
             // ─── END OCR SELF-VERIFICATION PASS ──────────────────────────────────────────
 
+            // ─── INDEPENDENT MCQ/AR GRADER PASS ──────────────────────────────────────────
+            // A genuinely independent second opinion for MCQ/AR: reads the source page
+            // image directly and determines correctness from scratch, with NO input from
+            // OCR, the librarian's text-splicing, or the main grader's judgment below — so
+            // it can catch an error introduced at ANY of those three stages, not just an
+            // OCR misread (which is all the self-verification pass above can catch). Same
+            // non-negotiable rule as everywhere else in this pipeline: never silently
+            // overrides marks either direction — agreement is trusted as-is, disagreement
+            // (or genuine uncertainty) is always forced to review with both verdicts shown
+            // (see REPORT RECONSTRUCTION below), a teacher makes the final call.
+            for (const q of questions) {
+                if (q.type !== 'MCQ' && q.type !== 'AR') continue;
+                const pagesForQ = pageMap.get(q._uid) || new Set();
+                const firstPage = Array.from(pagesForQ).sort((a, b) => a - b)[0];
+                if (!firstPage) continue;
+                const pageImagePart = imageParts[firstPage - 1];
+                if (!pageImagePart || pageImagePart._pdfPagePlaceholder) continue;
+                if (!q.answer) continue; // nothing to compare against
+
+                try {
+                    const graderModel = vertex_ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+                    const graderResult = await callGeminiWithRetry(graderModel, {
+                        contents: [{
+                            role: 'user',
+                            parts: [
+                                pageImagePart,
+                                { text: `Look at the handwritten region on this page that answers Question ${q.questionNumber}. This is a multiple-choice or assertion-reason question. The correct answer is:
+"""
+${q.answer}
+"""
+
+Based ONLY on what you see written in that region — ignore any other information — did the student choose/write the correct answer? Consider the answer correct if the student's chosen option OR the content they actually wrote clearly matches the correct answer above, even if the option letter is missing, misread, or written differently from how the correct answer is phrased.
+
+Respond with EXACTLY one word: CORRECT, INCORRECT, or UNCLEAR (if you cannot confidently tell what the student wrote for this specific question).` }
+                            ]
+                        }],
+                        generationConfig: {
+                            candidateCount: 1,
+                            seed: 42,
+                            temperature: 0,
+                            topP: 0,
+                            maxOutputTokens: 20,
+                            thinkingConfig: { thinkingBudget: 0 }
+                        }
+                    });
+                    const graderText = (graderResult.response.candidates[0].content.parts[0].text || '').trim().toUpperCase();
+                    if (/^CORRECT/.test(graderText)) q._independentGraderVerdict = 'CORRECT';
+                    else if (/^INCORRECT/.test(graderText)) q._independentGraderVerdict = 'INCORRECT';
+                    else q._independentGraderVerdict = 'UNCLEAR';
+                    console.log(`[IndependentGrader] Q${q.questionNumber}: verdict=${q._independentGraderVerdict}`);
+                } catch (graderErr) {
+                    console.warn(`[IndependentGrader] Q${q.questionNumber}: call failed, skipping: ${graderErr.message}`);
+                }
+            }
+            // ─── END INDEPENDENT MCQ/AR GRADER PASS ──────────────────────────────────────
+
             // ─── BATCH GRADING (UNCHANGED) ───────────────────────────────────────────
             const MAX_BATCH_WEIGHT = 16;
             const questionBatches = [];
@@ -8035,10 +8091,23 @@ if (gradedResult) {
                 const _ocrDisagreementNote = originalQ._ocrVerificationDisagreement
                     ? `\n\n[OCR VERIFICATION DISAGREEMENT — please check against the original answer sheet]\nOriginal OCR read: "${(originalQ._ocrVerificationOriginal || '').substring(0, 300)}"\nVerification re-read: "${(originalQ.studentText || '').substring(0, 300)}"`
                     : '';
+                // INDEPENDENT MCQ/AR GRADER DISAGREEMENT (see pass above): a from-scratch
+                // read of the image, with zero input from OCR/librarian/grader, disagreeing
+                // with (or unable to confirm) the pipeline's own verdict — same rule, always
+                // surfaced for a human, never silently trusted either way.
+                const _pipelineSaysCorrect = (gradedClean.marksAwarded || 0) >= (gradedClean.maxMarksForQuestion || 1);
+                const _independentDisagrees = originalQ._independentGraderVerdict === 'CORRECT' && !_pipelineSaysCorrect
+                    || originalQ._independentGraderVerdict === 'INCORRECT' && _pipelineSaysCorrect;
+                const _independentUnclear = originalQ._independentGraderVerdict === 'UNCLEAR';
+                const _independentNote = _independentDisagrees
+                    ? `\n\n[INDEPENDENT GRADER DISAGREEMENT — an independent read of the image, done separately from OCR/grading, reached a different conclusion: ${originalQ._independentGraderVerdict}. Please check against the original answer sheet]`
+                    : _independentUnclear
+                        ? `\n\n[INDEPENDENT GRADER UNCERTAIN — could not confidently confirm this answer from the image alone. Please check against the original answer sheet]`
+                        : '';
                 return {
                     ...gradedClean,
-                    requiresReview: gradedResult.requiresReview || !!originalQ._suspectedMislabel || !!originalQ._ocrVerificationDisagreement,
-                    finalFeedback: (gradedClean.finalFeedback || '') + _ocrDisagreementNote,
+                    requiresReview: gradedResult.requiresReview || !!originalQ._suspectedMislabel || !!originalQ._ocrVerificationDisagreement || _independentDisagrees || _independentUnclear,
+                    finalFeedback: (gradedClean.finalFeedback || '') + _ocrDisagreementNote + _independentNote,
                         studentOcrAnswer: originalQ.studentText,
                         // FIX: never use || 0 — pageIndices[0] can legitimately BE 0 (page 1)
                         // and 0 || 0 = 0 which is correct by accident, but undefined || 0 = 0
