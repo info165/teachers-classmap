@@ -1497,28 +1497,6 @@ If you cannot SEE ink, it does not exist. Never assume, infer, repair, or interp
 // ─────────────────────────────────────────────────────────────────────────────
 // END OF OCR INSTRUCTION
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ON-SCREEN MARKER POSITIONS — DISABLED 2026-08-17. Positions weren't reliably
-// accurate and this was extra prompt+output token cost on every grading call for
-// a display-only field (pageIndex/stepPoint are NOT used for marks/matching —
-// see OCR_SYSTEM_INSTRUCTION's [#P:p,y,x] tags above, which ARE still generated
-// and ARE still load-bearing for question-boundary matching; untouched).
-// This constant is the exact original instruction block that used to be inlined
-// into GRADING_SYSTEM_INSTRUCTION below. To re-enable: paste this back in right
-// before "SCORING RULES" in GRADING_SYSTEM_INSTRUCTION, and restore the
-// pageIndex/stepPoint schema properties + required entries near the
-// stepWiseEvaluation JSON schema definition (search "ON-SCREEN MARKER POSITIONS").
-const _DISABLED_COORDINATE_MARKER_INSTRUCTIONS = `
-COORDINATE MARKERS — MANDATORY
-═══════════════════════════════════
-Only TWO [#P] tags exist per question: START and END.
-Every stepWiseEvaluation entry MUST use the END tag only.
-pageIndex = page number from END [#P:page,y,x].
-stepPoint = [y, x] from END tag. Same for every step in this question.
-All steps, same question, same coordinate. This is correct. Do not vary it.
-Never invent a coordinate. Only use the END tag given.
-`;
-
 const GRADING_SYSTEM_INSTRUCTION = `You are an experienced examiner with expertise across CBSE, ICSE, CA, CS, UPSC, and all Indian education boards.
 
 YOUR JOB: Grade student answers using subject expertise and judgment — not text matching.
@@ -1792,17 +1770,28 @@ DIAGRAM LENIENCY LAW (MANDATORY):
 
 
 
+COORDINATE MARKERS — MANDATORY
+═══════════════════════════════════
+Only TWO [#P] tags exist per question: START and END.
+Every stepWiseEvaluation entry MUST use the END tag only.
+pageIndex = page number from END [#P:page,y,x].
+stepPoint = [y, x] from END tag. Same for every step in this question.
+All steps, same question, same coordinate. This is correct. Do not vary it.
+Never invent a coordinate. Only use the END tag given.
+
 NEGATIVE MARKER LAW (NON-NEGOTIABLE — SUBJECTIVE QUESTIONS ONLY):
 Does NOT apply to MCQ, AR, True/False. Those use short "Incorrect" only.
 For every rubric point where marks = 0 (wrong OR missing):
 - MUST generate stepWiseEvaluation entry, marks=0.
 - MUST include full comment. What required. What student wrote or missed.
+- MUST include coordinates. Use END tag. Same for all steps.
 - NEVER skip a negative step.
 
 UNATTEMPTED / UNDETECTED EXCEPTION (OVERRIDES THE LAW ABOVE):
 If student wrote nothing, or no text detected:
 - Generate exactly ONE stepWiseEvaluation entry, marks=0.
 - comment = "Not attempted" or "Not detected".
+- Use END tag for coordinates.
 Applies only when truly nothing written.
 This blank-answer rule applies to EVERY question type, including MCQ, AR, and
 True/False — the "does NOT apply to MCQ/AR/True-False" scoping above is only about
@@ -1815,7 +1804,10 @@ POSITIVE MARKERS:
 Correct steps → generate entry with marks > 0, short 2-3 word comment.
 These are optional if marks are full — but negative entries are ALWAYS mandatory.
 
-MISSING STEP: same rule, no exception.
+MISSING STEP: Use END tag. Same rule, no exception.
+
+
+INCORRECT STEP COORDINATES: Use END tag. Same as all steps.
 
 
 ═══════════════════════════════════
@@ -3803,14 +3795,13 @@ description: "The GRANULAR sub-concept this question tests. Rule: if your answer
             properties: {
                 marks: { type: "number" },
                 comment: { type: "string" },
-                // ON-SCREEN MARKER POSITIONS — DISABLED 2026-08-17 (cost + inaccurate placement, see COORDINATE MARKERS instruction block above GRADING_SYSTEM_INSTRUCTION's scoring section). Uncomment both properties AND add back to `required` below to re-enable.
-                // pageIndex: { type: "integer" },
-                // stepPoint: {
-                //     type: "array",
-                //     items: { type: "number" }
-                // }
+                pageIndex: { type: "integer" },
+                stepPoint: {
+                    type: "array",
+                    items: { type: "number" }
+                }
             },
-            required: ["marks"]
+            required: ["marks", "pageIndex", "stepPoint"]
         }
     }
 },
