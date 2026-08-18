@@ -7029,7 +7029,7 @@ questions.forEach(q => {
 // OR-RESOLUTION happens inside the grader via OR-PAIR LAW (see GRADING_SYSTEM_INSTRUCTION).
             // Losing side hidden post-grading by computeOrLoserQNums() on the frontend.
 
-            // ─── OCR SELF-VERIFICATION PASS (SA/LA/MCQ/AR) ───────────────────────────────
+            // ─── OCR SELF-VERIFICATION PASS (SA/LA questions only) ──────────────────────
             // The grading-time image cross-check (still in place below) asks ONE call to
             // both re-verify a transcript against the image AND apply grading logic — in
             // practice this does not reliably work: the model treats its own already-
@@ -7040,12 +7040,8 @@ questions.forEach(q => {
             // likely already included the page image). A narrow, single-purpose task is more
             // reliable than the same instruction bundled into a bigger, multi-purpose one —
             // so instead of asking the grader to also verify, run a small, focused, DEDICATED
-            // re-transcription pass for every applicable question before grading ever runs,
-            // using only that question's own page image and its own current transcript.
-            //
-            // Extended 2026-08-18 to also cover MCQ/AR (was SA/LA only) — the same OCR-misread
-            // risk applies to the option letter and the surrounding text a student writes, and
-            // there was previously zero protection against OCR simply reading the wrong letter.
+            // re-transcription pass for every SA/LA question before grading ever runs, using
+            // only that question's own page image and its own current transcript.
             //
             // Never silently prefers either reading. If the re-check confirms the original,
             // nothing changes. If it disagrees, the corrected reading is used for grading (a
@@ -7055,15 +7051,8 @@ questions.forEach(q => {
             // below), so a teacher makes the final call on any genuine disagreement. This can
             // only add review flags, never silently swap a correct grade for a wrong one.
             for (const q of questions) {
-                const _isMcqOrAr = q.type === 'MCQ' || q.type === 'AR';
-                if (q.type !== 'SA' && q.type !== 'LA' && !_isMcqOrAr) continue;
-                // MCQ/AR answers are legitimately very short (a single option letter) —
-                // the 10-char floor below exists to skip near-empty SA/LA noise, but would
-                // also skip the exact short, clean MCQ answers most worth verifying (a
-                // single misread character there changes the whole grade). Near-zero floor
-                // for MCQ/AR instead — only skip if truly nothing is there.
-                const _minLenToVerify = _isMcqOrAr ? 1 : 10;
-                if (!q.studentText || q.studentText.trim().length < _minLenToVerify) continue; // nothing to verify
+                if (q.type !== 'SA' && q.type !== 'LA') continue;
+                if (!q.studentText || q.studentText.trim().length < 10) continue; // nothing to verify
                 const pagesForQ = pageMap.get(q._uid) || new Set();
                 const firstPage = Array.from(pagesForQ).sort((a, b) => a - b)[0];
                 if (!firstPage) continue;
