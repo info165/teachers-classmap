@@ -7832,6 +7832,35 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             .replace(/⊆/g, ' subseteq ').replace(/⊂/g, ' subset ')
                             .replace(/≤/g, ' le ').replace(/≥/g, ' ge ')
                             .replace(/≠/g, ' neq ')
+                            // LATEX ESCAPE-DELIMITER STRIP (2026-08-18, validated against 205 real
+                            // production disagreement records before shipping). Two DIFFERENT rules
+                            // for two DIFFERENT reasons:
+                            //  1. Escaped ROUND delimiters (\\( \\)) are stripped ENTIRELY (backslash
+                            //     AND the bracket itself) — they carry zero distinguishing meaning
+                            //     (same "round brackets = pure grouping" intent as the GENERAL FIX
+                            //     below), and a model answer wrapped once around a whole multi-part
+                            //     expression vs a student wrapping each part separately must collapse
+                            //     to the same token sequence. Fixes real under-credited students
+                            //     (auditLogs: XI_UT-1_Physics Q5, exact-match answers scored 0).
+                            //  2. Escaped CURLY/SQUARE delimiters (\\{ \\} \\[ \\]) strip ONLY the
+                            //     backslash, leaving the bracket character itself — unlike round
+                            //     brackets, curly/square DO carry real meaning (discrete set vs
+                            //     interval notation) that must survive so the bracket-TYPE
+                            //     distinction below still works.
+                            // Comma is ALSO stripped (pure separator, never itself distinguishes two
+                            // different correct answers) — matters beyond math too: AR/prose model
+                            // answers like "A is false, but R is true." need to match student
+                            // paraphrases without the exact same comma placement.
+                            // NOT stripped: bare (unescaped) round brackets. Tested and rejected —
+                            // stripping them recovers more real cases but ALSO reintroduces false
+                            // negatives in dense multi-answer OCR blocks where a bare "(i)"-style
+                            // marker was accidentally acting as a separator between unrelated
+                            // fragments; the net trade was worse, not better (measured against real
+                            // data: +29 recoveries for +17 new regressions). Left as a known,
+                            // understood gap rather than trading one bug for a worse one.
+                            .replace(/\\\(/g, ' ').replace(/\\\)/g, ' ')
+                            .replace(/\\([{}\[\]])/g, '$1')
+                            .replace(/,/g, ' ')
                             .replace(/\{/g, ' curlyopen ').replace(/\}/g, ' curlyclose ')
                             .replace(/\[/g, ' squareopen ').replace(/\]/g, ' squareclose ')
                             // GENERAL FIX (replaces a whack-a-mole pattern of naming one more
@@ -7858,7 +7887,15 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             .replace(/\[PAGE[^\]]*\]/gi, ' ')
                             .replace(/\bAns\.?\s*\d+/gi, ' ');
                         const _hay  = _tok(_hayText);
+                        // LENGTH GUARD FIX (2026-08-18): was character-count based (>=5 chars),
+                        // calibrated before the stripping above existed. Punctuation used to pad
+                        // this count; stripping it (correctly) now makes short-but-real answers
+                        // like "(5, 2)" -> "5 2" under-count and get wrongly rejected as trivial.
+                        // Token-count is a more stable measure of real distinguishing content
+                        // regardless of how much punctuation surrounds it. Preserves the original
+                        // documented intent exactly (reject a lone 1-2 char token like "1"/"2s").
                         const _needChars = _need.join('').length;
+                        const _hasEnoughContent = _need.length >= 2 || (_need.length === 1 && _need[0].length > 2);
                         const _seqIn = (hay, need) => {
                             if (!need.length) return false;
                             for (let i = 0; i + need.length <= hay.length; i++) {
@@ -7870,7 +7907,7 @@ console.log(`[MCQ Extract] Q${qr.questionNumber}: student="${studentLetter}" mod
                             }
                             return false;
                         };
-                        if (_needChars >= 5 && !(_need.length === 1 && _need[0].length <= 2) && _seqIn(_hay, _need)) {
+                        if (_hasEnoughContent && _seqIn(_hay, _need)) {
                             _textCorrect = true;
                         }
                         if (_textCorrect) console.log(`[MCQ textCorrect] Q${qr.questionNumber}: written answer matches correct option ${modelLetter} (letter="${studentLetter || '?'}")`);
