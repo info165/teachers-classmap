@@ -65,6 +65,9 @@ node_modules/
 # dotenv environment variables file
 .env
 vertex-ai-backend/env
+teachers-classmap/.env.txt
+teachers-classmap/env
+teachers-classmap/dist/
 
 # Service account credentials
 functions/serviceAccountKey*.json

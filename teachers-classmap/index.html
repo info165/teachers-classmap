@@ -1,0 +1,3265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#3498db">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="ClassMap">
+    <link rel="apple-touch-icon" href="images/icon-192.png">
+    <title>ClassMap Teacher Hub</title>
+    <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
+    "firebase/": "https://esm.sh/firebase@^12.8.0/",
+    "marked": "https://esm.sh/marked@^17.0.1"
+  }
+}
+</script>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path fill='%236a11cb' d='M50,15 L5,35 L50,55 L95,35 L50,15 Z M10,40 L10,60 C10,60 50,85 50,85 C50,85 90,60 90,60 L90,40 L50,60 L10,40 Z'/></svg>">
+    <link rel="manifest" href="manifest.json">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <!-- Cropper.js -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<!-- ADD THIS ENTIRE BLOCK -->
+<script>
+  window.MathJax = {
+    loader: { load: ['[tex]/ams', '[tex]/cases'] },
+    tex: {
+      packages: { '[+]': ['ams', 'cases'] },
+      inlineMath: [['\\(', '\\)']],
+      displayMath: [['\\[', '\\]']]
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+
+<!-- Correct PDF.js Module Loading with Worker -->
+<script type="module">
+    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+    
+    // Attach to window so index.tsx can find it
+    window.pdfjsLib = pdfjsLib;
+    
+    // Explicitly set the worker source correctly
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+    
+    console.log("PDF.js Worker Configured");
+</script>
+
+
+
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
+
+    <script>
+// IMPORTANT: Replace with your actual Firebase project configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyBUz-P-j3YAJu-PMTQ7WypTwc-oC1m_0PA",
+  authDomain: "student-database-74297.firebaseapp.com",
+  projectId: "student-database-74297",
+  storageBucket: "student-database-74297.firebasestorage.app",
+  messagingSenderId: "381798657010",
+  appId: "1:381798657010:web:913eaf24de9aa59c0dd96b",
+  measurementId: "G-LGS56FJTGB"
+};
+      window.firebaseConfig = firebaseConfig;
+      window.process = { env: {} };
+    </script>
+<script type="module" src="index.tsx"></script>
+<link rel="stylesheet" href="index.css">
+<script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+
+  <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.3/dist/opencv.min.js" onload="window.cvReady = true" crossorigin="anonymous"></script>
+
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+        <!-- START: Add this new block -->
+    <div id="update-notification" style="display: none;">
+        <span>A new version is available.</span>
+        <button id="update-app-btn">Update Now</button>
+    </div>
+
+<div id="app-container">
+    <button id="sidebar-toggle" title="Toggle Class Menu">
+        <span class="arrow">›</span>
+    </button>
+    <aside id="sidebar">
+        <div class="sidebar-header">
+<h3>My Classes</h3>
+<div style="padding: 8px 12px 4px;">
+    <input 
+        type="text" 
+        id="class-search-input"
+        placeholder="Search classes..."
+        oninput="window.filterClassSidebar(this.value)"
+        style="width:100%; box-sizing:border-box; padding:6px 10px; border-radius:8px; border:1px solid #dde1f0; font-size:0.78rem; outline:none; background:#f5f6fc; color:#1a237e;"
+    />
+</div>
+<div id="class-list-container">
+            <!-- Class cards will be dynamically inserted here by index.tsx -->
+        </div>
+    </aside>
+      <div id="main-content-wrapper">
+    <div id="app-background-container"></div>
+    <header>
+        <div class="header-content">
+            <div class="header-left">
+                <button id="global-back-btn" class="button-secondary icon-btn" style="display: none;"><span class="icon">⬅️</span><span class="mobile-text-hidden"> Back</span></button>
+                <div class="header-logo" id="app-logo-link" style="cursor: pointer;">
+                    <div class="header-logo-text">ClassMap</div>
+                </div>
+            </div>
+
+            <h1 id="main-app-title">Teacher Hub</h1>
+            <div id="user-actions-container">
+    <div class="header-utility-actions">
+        <button id="install-pwa-btn" class="button-secondary icon-btn pwa-install-btn" title="Install App">
+            <span class="icon">📲</span>
+            <span class="mobile-text-hidden"> Install</span>
+        </button>
+        <div id="teacher-profile-icon-container" class="profile-icon-container" title="Profile & Settings">
+            <img id="teacher-profile-avatar-img" src="#" alt="Avatar" style="display:none;">
+            <span id="teacher-profile-initials-avatar" style="display:none;"></span>
+        </div>
+    </div>
+    <!-- Dropdown Menu -->
+    <div id="profile-dropdown-menu" class="dropdown-menu">
+        <div class="dropdown-header">
+            <p class="user-role-text">Teacher</p>
+            <p id="user-email-display" class="user-email-text"></p>
+        </div>
+        <button id="edit-profile-btn" class="dropdown-item"><span class="icon">👤</span> Edit Profile</button>
+        <button id="help-centre-btn" class="dropdown-item"><span class="icon">❓</span> Help Centre</button>
+        <button id="logout-btn" class="dropdown-item"><span class="icon">🚪</span> Logout</button>
+    </div>
+</div>
+        </div>
+    </header>
+
+
+
+    <main>
+        <div id="loading-indicator" class="loading" style="display: none;" aria-label="Loading" role="status" aria-live="assertive">
+            <div class="spinner"></div>
+            <p id="loading-text">Processing...</p>
+        </div>
+        <div id="feedback-message-panel" class="feedback-panel" style="display: none;" role="alert"></div>
+
+
+
+        <!-- TEACHER REGISTRATION -->
+        <section id="teacher-registration-section" class="content-card" style="display: none;" aria-labelledby="teacher-register-heading">
+            <form id="teacher-registration-form">
+                <h2 id="teacher-register-heading">📝 New Teacher Registration</h2>
+                <p>Join and start creating AI-powered homework!</p>
+                <div class="form-group">
+                    <label for="teacher-register-name-input">Full Name:</label>
+                    <input type="text" id="teacher-register-name-input" placeholder="Enter your full name">
+                </div>
+                <div class="form-group">
+                    <label for="teacher-register-email-input">Email Address:</label>
+                    <input type="email" id="teacher-register-email-input" placeholder="Enter your email">
+                </div>
+                <div class="form-group">
+                    <label for="teacher-register-password-input">Create Password:</label>
+                    <input type="password" id="teacher-register-password-input" placeholder="Choose a strong password (min. 6 characters)">
+                </div>
+                
+  <div class="form-group">
+    <label for="teacher-register-phone-input" class="important-label">Phone Number:</label>
+    <div class="phone-input-group">
+        <span class="country-code">+91</span>
+        <input type="tel" id="teacher-register-phone-input" placeholder="10-digit mobile number" maxlength="10">
+    </div>
+</div>
+
+
+                <div class="form-group" style="position: relative;">
+                    <label for="teacher-register-school-input" class="important-label">School Name:</label>
+                    <input type="text" id="teacher-register-school-input" placeholder="Start typing your school name..." autocomplete="off">
+                    <div id="school-suggestions-container" class="suggestions-container"></div>
+                    <p id="school-register-loading-msg" class="form-loading-message" style="display:none;">Loading schools...</p>
+                </div>
+                <div class="form-group-separator">
+                    <button type="button" id="school-not-listed-btn" class="button-tertiary">My school is not on this list</button>
+                </div>
+                <div id="teacher-register-other-school-container" style="display:none;">
+                    <div class="info-box">
+                        <p><strong>Your school isn't listed?</strong> No problem! Please enter the full name and curriculum board below. This will add it to our system for you and other teachers from your school.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="teacher-register-school-other-input" class="important-label">Your School's Full Name:</label>
+                        <input type="text" id="teacher-register-school-other-input" placeholder="e.g., Pinegrove International School, Jaipur">
+                    </div>
+                    <div class="form-group">
+                        <label for="teacher-register-board-other-input" class="important-label">Your School's Board:</label>
+                        <input type="text" id="teacher-register-board-other-input" placeholder="e.g., CBSE, ICSE, State Board">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="teacher-register-classes-select">Classes You Teach (Ctrl/Cmd + click for multiple):</label>
+                    <p class="description">Select the grades you teach (e.g., Class 8, Class 9). You can create specific sections later.</p>
+                    <select id="teacher-register-classes-select" multiple size="5" class="styled-select styled-multiselect">
+                        <option value="4">Class 4</option>
+                        <option value="5">Class 5</option>
+                        <option value="6">Class 6</option>
+                        <option value="7">Class 7</option>
+                        <option value="8">Class 8</option>
+                        <option value="9">Class 9</option>
+                        <option value="10">Class 10</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="teacher-register-subjects-select">Subjects You Teach (Ctrl/Cmd + click for multiple):</label>
+                    <select id="teacher-register-subjects-select" multiple size="4" class="styled-select styled-multiselect">
+                        <!-- Options are now populated dynamically by index.tsx -->
+                    </select>
+                </div>
+                <!-- It should now look like this -->
+<button id="submit-teacher-registration-btn" type="submit" class="button-primary icon-btn accent-positive-btn">Register <span class="icon">🚀</span></button>
+            </form>
+        </section>
+
+       <!-- REPLACE the old "teacher-login-section" with this new structure -->
+<!-- ...WITH THIS NEW SECTION -->
+<section id="teacher-login-section" class="login-page-container" style="display: none;">
+    <!-- Left Panel for Branding -->
+    <div class="login-left-panel">
+        <div class="login-branding-content">
+            <div class="header-logo" style="margin-bottom: 30px; display: inline-block;">
+                <div class="header-logo-text" style="color: white; border-color: white; font-size: 1.8rem; padding: 5px 15px;">ClassMap</div>
+            </div>
+            <h2 style="font-family: 'Poppins', sans-serif; font-size: 2.5rem; font-weight: 700; line-height: 1.3; text-shadow: 2px 2px 5px rgba(0,0,0,0.2); border: none; padding: 0;">Let teachers teach. <br>Let AI do the rest.</h2>
+        </div>
+    </div>
+
+    <!-- Right Panel for the Login Form -->
+    <div class="login-right-panel">
+        <form id="teacher-login-form">
+            <h2>Teacher Login</h2>
+            <p class="description">Welcome back! Please enter your credentials.</p>
+            <div class="form-group">
+                <label for="teacher-login-email-input">Email Address</label>
+                <input type="email" id="teacher-login-email-input" placeholder="you@example.com" required>
+            </div>
+<div class="form-group">
+    <label for="teacher-login-password-input">Password</label>
+    <input type="password" id="teacher-login-password-input" placeholder="Enter your password" required>
+    <!-- START: ADD THIS NEW LINE -->
+    <div id="login-error-message" class="form-error-message" style="display: none;"></div>
+    <!-- END: ADD THIS NEW LINE -->
+</div>
+<a href="#" id="forgot-password-link" class="forgot-password-link">Forgot Password?</a>
+            <button id="submit-teacher-login-btn" type="submit" class="button-primary full-width-btn">Login</button>
+        </form>
+    </div>
+</section>
+
+        <!-- TEACHER PROFILE EDIT SECTION -->
+        <section id="teacher-profile-edit-section" class="content-card" style="display: none;" aria-labelledby="teacher-profile-edit-heading">
+            <form id="teacher-profile-edit-form">
+                <h2 id="teacher-profile-edit-heading">👤 Edit Teacher Profile</h2>
+                <div class="profile-edit-grid">
+                    <div class="profile-form-fields">
+                        <div class="form-group">
+                            <label>Name:</label>
+                            <p id="teacher-profile-name-display" class="profile-readonly-field"></p>
+                        </div>
+                        <div class="form-group">
+                            <label>Email:</label>
+                            <p id="teacher-profile-email-display" class="profile-readonly-field"></p>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-phone">Phone:</label>
+                            <input type="tel" id="profile-phone" placeholder="Your contact number">
+                        </div>
+                        <div class="form-group">
+                            <label>School:</label>
+                            <p id="teacher-profile-school-display" class="profile-readonly-field"></p>
+                        </div>
+                        <div class="form-group">
+                            <label>Board:</label>
+                            <p id="teacher-profile-board-display" class="profile-readonly-field"></p>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-classes">Classes Taught:</label>
+                            <select id="profile-classes" multiple size="3" class="styled-select styled-multiselect">
+                                <!-- Options populated by JS -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-subjects">Subjects Taught:</label>
+                            <select id="profile-subjects" multiple size="3" class="styled-select styled-multiselect">
+                                <!-- Options populated by JS -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-address">Address:</label>
+                            <textarea id="profile-address" placeholder="Your residential address"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-pincode">PIN Code:</label>
+                            <input type="text" id="profile-pincode" placeholder="e.g., 110011">
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-emergency-contact">Emergency Contact:</label>
+                            <input type="tel" id="profile-emergency-contact" placeholder="Emergency contact number">
+                        </div>
+                    </div>
+                </div>
+                <button id="teacher-profile-save-btn" type="submit" class="button-primary icon-btn accent-positive-btn"><span class="icon">💾</span> Save Profile Changes</button>
+            </form>
+        </section>
+
+    <!-- All other sections like teacher-login-section, teacher-profile-edit-section, etc., remain here -->
+
+    <!-- START: NEW Main Teacher Dashboard Section -->
+    <section id="main-teacher-dashboard-section" style="display: none;">
+    <!-- ADD THIS NEW CONTAINER -->
+<div id="mobile-class-container">
+    <h2 class="section-divider-heading">My Classes</h2>
+    <div id="mobile-class-grid">
+        <!-- Mobile class cards will be inserted here by JavaScript -->
+    </div>
+</div>
+<!-- END of new container -->
+        <!-- Add this new block -->
+        <div class="main-dashboard-grid">
+    <!-- Row 1: Calendar and Notes -->
+    <div id="calendar-card" class="content-card">
+        <div class="dashboard-card-header">
+            <h3>
+                <div class="dashboard-card-icon">🗓️</div>
+                <span>My Calendar</span>
+            </h3>
+        </div>
+        <div id="calendar-widget">
+            <div class="calendar-header">
+                <button id="calendar-prev" class="calendar-nav-btn">‹</button>
+                <h4 id="calendar-month-year"></h4>
+                <div class="calendar-header-actions">
+                    <button id="add-calendar-event-btn" class="button-tertiary extra-small-button" title="Add New Event">+</button>
+                    <button id="calendar-next" class="calendar-nav-btn">›</button>
+                </div>
+            </div>
+            <div class="calendar-weekdays">
+                <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            </div>
+            <div id="calendar-grid" class="calendar-grid"></div>
+        </div>
+    </div>
+    <div id="notes-card" class="content-card">
+        <div class="dashboard-card-header">
+            <h3>
+                <div class="dashboard-card-icon">📝</div>
+                <span>Sticky Notes</span>
+            </h3>
+            <button id="add-note-btn" class="button-tertiary extra-small-button">+</button>
+        </div>
+        <div id="notes-container">
+            <div class="empty-notes-placeholder">
+                <p>Your sticky notes will appear here. Click the '+' button to add your first note!</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Row 2: Performance and Completion -->
+    <div id="class-wise-graph-card" class="content-card">
+        <div class="dashboard-card-header">
+            <h3>
+                <div class="dashboard-card-icon">📊</div>
+                <span>Class Performance Comparison</span>
+            </h3>
+           <div class="toggle-switch-group">
+                <button type="button" class="toggle-btn" data-view="homework">Assignments</button>
+                <button type="button" class="toggle-btn active" data-view="assessment">Exams</button>
+            </div>
+        </div>
+        <div class="chart-container">
+            <canvas id="class-performance-chart"></canvas>
+        </div>
+    </div>
+   <div id="completion-rate-card" class="content-card">
+        <div class="dashboard-card-header">
+            <h3>
+                <div class="dashboard-card-icon">✔️</div>
+                <span>Assignment Completion</span>
+            </h3>
+            <select id="completion-class-filter" class="styled-select"></select>
+        </div>
+        <div class="chart-container">
+            <canvas id="completion-rate-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+    </section>
+    <!-- END: NEW Main Teacher Dashboard Section -->
+
+
+    <!-- START: NEW Individual Class Page Section -->
+    <section id="individual-class-page-section" style="display: none;">
+        <div id="class-page-header">
+            <!-- Header content will be generated by JS -->
+        </div>
+        <div class="class-page-content">
+
+            <!-- Exams Section -->
+<div id="class-page-assessment" class="content-card">
+    <div class="class-page-section-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <h2>📝 Exams</h2>
+        <button id="class-page-create-as" class="cp-plus-btn" title="Create New Exam">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><line x1="9" y1="3" x2="9" y2="15" stroke="white" stroke-width="2.2" stroke-linecap="round"/><line x1="3" y1="9" x2="15" y2="9" stroke="white" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+    </div>
+    <div class="class-page-stats">
+        <!-- Exam stats will be added here -->
+    </div>
+    <div id="class-page-as-list" class="cp-inline-list">
+        <!-- Assessment list populated by JS -->
+    </div>
+    <!-- Hidden elements for JS compatibility -->
+    <div id="assessment-strengths" style="display:none;"><div class="topics-container"></div></div>
+    <div id="assessment-weaknesses" style="display:none;"><div class="topics-container"></div></div>
+    <div id="assessment-top-performers" style="display:none;"><ul></ul></div>
+    <div id="assessment-needs-help" style="display:none;"><ul></ul></div>
+</div>
+
+            <!-- Assignments Section -->
+<div id="class-page-homework" class="content-card">
+    <div class="class-page-section-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <h2>📚 Assignments</h2>
+        <button id="class-page-create-hw" class="cp-plus-btn" title="Create New Assignment">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><line x1="9" y1="3" x2="9" y2="15" stroke="white" stroke-width="2.2" stroke-linecap="round"/><line x1="3" y1="9" x2="15" y2="9" stroke="white" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+    </div>
+    <div class="class-page-stats">
+        <!-- Assignment stats will be added here -->
+    </div>
+    <div id="class-page-hw-list" class="cp-inline-list">
+        <!-- Homework list populated by JS -->
+    </div>
+    <!-- Hidden elements for JS compatibility -->
+    <div id="homework-strengths" style="display:none;"><div class="topics-container"></div></div>
+    <div id="homework-weaknesses" style="display:none;"><div class="topics-container"></div></div>
+    <div id="homework-top-performers" style="display:none;"><ul></ul></div>
+    <div id="homework-needs-help" style="display:none;"><ul></ul></div>
+</div>
+
+            <!-- Personalized Worksheets Section -->
+            <div id="class-page-remedial" class="content-card">
+                <div class="class-page-section-header">
+                    <h2>🪄 Personalized Worksheets</h2>
+                </div>
+                <div class="class-page-stats" id="remedial-stats-container">
+                    <!-- Stats populated by JS -->
+                </div>
+                <div class="class-page-action-btns">
+                    <button id="class-page-view-remedial" class="cp-action-btn cp-action-btn-view cp-action-btn-full" title="View All Worksheets">
+                        <span class="cp-action-icon">📋</span>
+                        <span class="cp-action-label">View All Worksheets</span>
+                    </button>
+                </div>
+                <div class="info-box" style="margin-top: 14px; padding: 12px; font-size: 0.85rem;">
+                    <p>AI-generated 2-mark case studies based on student mistakes in assessments.</p>
+                </div>
+            </div>
+
+        </div>
+    </section>
+    <!-- END: NEW Individual Class Page Section -->
+
+
+<!-- Add this new modal -->
+<div id="calendar-event-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('calendar-event-modal', false)">&times;</button>
+        <h3 id="event-modal-title" class="modal-title">Events for [Date]</h3>
+        
+        <div id="calendar-event-list">
+            <!-- Existing events will be listed here -->
+        </div>
+
+        <div class="form-separator" style="margin: 20px 0;"><span>Add New Event</span></div>
+
+        <form id="add-event-form">
+            <div class="form-group">
+                <label for="event-text-input">Event Description:</label>
+                <input type="text" id="event-text-input" placeholder="e.g., Physics Class Test" required>
+            </div>
+            <div class="form-group">
+                <label>Event Type:</label>
+                <div id="event-color-picker" class="option-picker-group">
+                    <input type="radio" name="event-color" id="color-test" value="#e74c3c" class="visually-hidden-input" checked>
+                    <label for="color-test" class="option-picker-label" style="background: #e74c3c;">Test/Exam</label>
+                    
+                    <input type="radio" name="event-color" id="color-holiday" value="#9b59b6" class="visually-hidden-input">
+                    <label for="color-holiday" class="option-picker-label" style="background: #9b59b6;">Holiday</label>
+                    
+                    <input type="radio" name="event-color" id="color-meeting" value="#3498db" class="visually-hidden-input">
+                    <label for="color-meeting" class="option-picker-label" style="background: #3498db;">Meeting</label>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="button-secondary" onclick="toggleModal('calendar-event-modal', false)">Cancel</button>
+                <button type="submit" class="button-primary">Save Event</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<section id="teacher-assessment-history-section" style="display: none;" aria-labelledby="assessment-history-heading">
+    <div class="assessment-history-layout">
+        <!-- Left Column: Assessment List -->
+        <div class="assessment-list-panel">
+             <div class="history-header">
+                <h2 id="assessment-history-heading">📜 My Exams</h2>
+                <div class="history-controls">
+                    <button id="assessment-search-btn" class="filter-icon-btn" title="Search by Title">🔍</button>
+                    <button id="assessment-sort-btn" class="filter-icon-btn" title="Sort by Date">↕️</button>
+                </div>
+                <div id="assessment-search-popup" class="filter-popup">
+                    <div class="form-group">
+                        <label for="assessment-search-input">Search by Title</label>
+                        <input type="search" id="assessment-search-input" placeholder="e.g., Mid-term Exam...">
+                    </div>
+                </div>
+                <div id="assessment-sort-popup" class="filter-popup">
+                    <div class="form-group">
+                        <label for="assessment-sort-select">Sort by Date</label>
+                        <select id="assessment-sort-select" class="styled-select">
+                            <option value="newest">Newest First</option>
+                            <option value="oldest">Oldest First</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div id="assessment-history-list-container">
+                <!-- Assessment cards will be dynamically populated here -->
+            </div>
+            <div id="no-assessment-history-message" class="empty-list-message" style="display:none;">
+                 <p>You haven't created any assessments yet.</p>
+            </div>
+        </div>
+        <!-- Right Column: Analytics Dashboard -->
+        <div id="assessment-analytics-dashboard-panel" class="assessment-analytics-panel">
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Overall Performance</h3>
+                <div id="assessment-summary-stats-container" class="stats-grid">
+                    <!-- Overall stats will be rendered here by JS -->
+                </div>
+            </div>
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Average Score per Assessment</h3>
+                <div class="chart-wrapper">
+                    <div class="chart-container" style="height: 350px;">
+                        <canvas id="assessment-wise-avg-score-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Student Average Performance</h3>
+                <div class="chart-wrapper">
+                    <div class="chart-container" style="height: 400px;">
+                        <canvas id="assessment-student-performance-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+<!-- END: Replacement block -->
+
+<!-- AFTER the teacher-assessment-history-section, PASTE THIS ENTIRE BLOCK -->
+<!-- START: NEW ANALYTICS HUB SECTION -->
+<section id="teacher_analytics_hub_section" style="display: none;" aria-labelledby="analytics-hub-heading">
+    <div class="content-card">
+        <h2 id="analytics-hub-heading">📊 Performance Analytics Hub</h2>
+        <div id="analytics-filter-bar" class="analytics-filter-bar">
+            <!-- These filters remain the same -->
+            <div class="form-group">
+                <label for="analytics-class-select">Class</label>
+                <select id="analytics-class-select" class="styled-select"></select>
+            </div>
+            <div class="form-group">
+                <label for="analytics-section-select">Section</label>
+                <select id="analytics-section-select" class="styled-select"></select>
+            </div>
+            <div class="form-group">
+                <label for="analytics-subject-select">Subject</label>
+                <select id="analytics-subject-select" class="styled-select"></select>
+            </div>
+            <button id="analytics-apply-filters-btn" class="button-primary">Load Analytics</button>
+        </div>
+    </div>
+
+    <div id="analytics-content-area" class="analytics-content-area" style="display: none;">
+        <!-- Main Tabs for switching between Class and Student views -->
+        <div class="analytics-main-tabs">
+            <button id="analytics-class-view-tab-btn" class="analytics-main-tab-btn active" type="button">Class Analytics</button>
+            <button id="analytics-student-view-tab-btn" class="analytics-main-tab-btn" type="button">Student Analytics</button>
+        </div>
+
+        <!-- Panel 1: Class Analytics View -->
+        <div id="analytics-class-view-panel" class="analytics-main-panel">
+            <div class="analytics-tabs">
+                <button id="analytics-homework-tab-btn" class="analytics-tab-btn active" type="button">Homeworks</button>
+                <button id="analytics-assessment-tab-btn" class="analytics-tab-btn" type="button">Assessments</button>
+            <button id="analytics-remedial-tab-btn" class="analytics-tab-btn" type="button">Remedials</button>
+            </div>
+
+            <!-- Class Analytics -> Homeworks Sub-Panel -->
+            <div id="analytics-homework-panel" class="analytics-tab-panel">
+                <div class="content-card">
+                    <div class="form-group">
+                        <label for="analytics-homework-select">Select a Homework to Analyze:</label>
+                        <select id="analytics-homework-select" class="styled-select">
+                            <option value="">-- Please load analytics first --</option>
+                        </select>
+                    </div>
+                    <div id="homework-analytics-content">
+                        <!-- Homework Question Matrix will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Class Analytics -> Assessments Sub-Panel -->
+            <div id="analytics-assessment-panel" class="analytics-tab-panel" style="display: none;">
+                 <div class="content-card">
+                    <div class="form-group">
+                        <label for="analytics-assessment-select">Select an Assessment to Analyze:</label>
+                        <select id="analytics-assessment-select" class="styled-select">
+                           <option value="">-- Please load analytics first --</option>
+                        </select>
+                    </div>
+                    <div id="assessment-analytics-content">
+                        <!-- Assessment Class-wide analytics will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Class Analytics -> Remedials Sub-Panel -->
+<div id="analytics-remedial-panel" class="analytics-tab-panel" style="display: none;">
+    <div class="content-card">
+        <h3>Class Remedial Submissions</h3>
+        <p class="description">Review results from personalized worksheets generated by AI to address conceptual gaps.</p>
+        <div id="remedial-analytics-content">
+            <p class="info-text">Apply filters to see submissions.</p>
+        </div>
+    </div>
+</div>
+        </div>
+
+        <!-- Panel 2: Student Analytics View -->
+        <div id="analytics-student-view-panel" class="analytics-main-panel" style="display: none;">
+            <div class="content-card">
+                <div class="form-group">
+                    <label for="analytics-student-select">Select a Student to View Their Portfolio:</label>
+                    <select id="analytics-student-select" class="styled-select">
+                        <option value="">-- Please load analytics first --</option>
+                    </select>
+                </div>
+            </div>
+            <div id="student-analytics-dashboard" style="display:none;">
+                <!-- This will be populated with the student's full report -->
+                <div class="content-card">
+                    <h3>Assessment Performance Timeline</h3>
+                    <p class="description">Tracking student scores across all major assessments over time.</p>
+                    <div class="chart-container" style="height: 350px;">
+                        <canvas id="student-assessment-timeline-chart-canvas"></canvas>
+                    </div>
+                </div>
+                <div id="student-score-comparison-container">
+                    <!-- Score comparison cards will be rendered here -->
+                </div>
+                <div class="content-card">
+                    <h3>Topic Mastery Analysis (Based on Assessments)</h3>
+                    <p class="description">An AI-powered analysis of the student's strengths and areas for improvement by topic.</p>
+                    <div id="student-topic-mastery-container"></div>
+                </div>
+                <div class="content-card">
+                    <h3>Homework Report Card</h3>
+                    <div id="student-homework-table-container"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!--
+    PASTE THESE THREE NEW SECTION BLOCKS
+-->
+<!-- TEACHER ASSESSMENT CREATION FROM CURRICULUM TOPICS -->
+<section id="teacher-assessment-creation-form-section" class="content-card as-unified-section" style="display: none;">
+<section id="teacher-assessment-creation-book-images-form-section" style="display:none;"></section>
+<section id="teacher-assessment-creation-question-images-section" style="display:none;"></section>
+
+<!-- ── Tab header ─────────────────────────────────────────────────── -->
+<div class="as-tab-header">
+    <div class="as-tab-title">Create Exam</div>
+    <div class="as-tabs" id="as-tabs">
+                <button class="as-tab" data-tab="myq" onclick="window.switchAssessmentTab('myq')">
+            <span class="as-tab-icon">✍️</span>
+            <span class="as-tab-label">My Questions</span>
+        </button>
+        <button class="as-tab active" data-tab="ai" onclick="window.switchAssessmentTab('ai')">
+            <span class="as-tab-icon">💡</span>
+            <span class="as-tab-label">Using AI</span>
+        </button>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     TAB 1: USING AI
+     ══════════════════════════════════════════════════════════════════ -->
+<div id="as-tab-ai" class="as-tab-panel active">
+<form id="assessment-creation-form">
+
+    <!-- Row 1: Subject / Class / Section -->
+    <div class="as-compact-row">
+        <div class="as-field-group">
+            <label for="as-create-subject-select" class="as-label important-label">Subject</label>
+            <select id="as-create-subject-select" class="as-input" required></select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="as-create-class-select" class="as-label important-label">Class</label>
+            <select id="as-create-class-select" class="as-input" required></select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="as-create-section-select" class="as-label">Section</label>
+            <select id="as-create-section-select" class="as-input"></select>
+            <input type="text" id="as-create-section-custom" class="as-input" placeholder="Custom section" style="display:none; margin-top:6px;">
+        </div>
+    </div>
+
+    <!-- Row 2: Title -->
+    <div class="as-compact-row">
+        <div class="as-field-group" style="flex:1;">
+            <label for="as-create-title-input" class="as-label">Assessment Title <span class="as-label-hint">(or generate from chapters below)</span></label>
+            <input type="text" id="as-create-title-input" class="as-input" placeholder="e.g., Chapter 5: Light — Revision Test">
+        </div>
+    </div>
+
+    <!-- Row 3: Chapters + Topics -->
+    <div class="as-compact-row as-row-tall">
+        <div class="as-field-group">
+            <label for="as-create-chapters-select" class="as-label important-label">Chapters <span class="as-label-hint">Ctrl/Cmd + click for multiple</span></label>
+            <select id="as-create-chapters-select" multiple size="4" class="as-input as-multiselect">
+                <option value="" disabled>— Select Subject &amp; Class first —</option>
+            </select>
+            <p id="as-chapters-loading-message" class="form-loading-message" style="display:none;">Loading chapters…</p>
+        </div>
+        <div class="as-field-group">
+            <label for="as-create-topics-select" class="as-label">Topics <span class="as-label-hint">Optional</span></label>
+            <select id="as-create-topics-select" multiple size="4" class="as-input as-multiselect">
+                <option value="" disabled>— Select Chapter(s) first —</option>
+            </select>
+            <p id="as-topics-loading-message" class="form-loading-message" style="display:none;">Loading topics…</p>
+        </div>
+    </div>
+
+    <!-- Bloom's Builder (unchanged content, new wrapper) -->
+    <div class="as-blooms-section">
+        <div class="as-blooms-header">
+            <div class="as-blooms-title">
+                <span class="as-blooms-icon">🧠</span>
+                Bloom's Taxonomy Question Builder
+            </div>
+            <button type="button" class="as-help-btn" onclick="toggleModal('blooms-instructions-modal', true)">ℹ️ Instructions</button>
+        </div>
+        <div id="as-blooms-builder" class="blooms-builder-container">
+    <!-- Level 1: Remember -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L1: Remember</h4>
+                <p>Recall facts, terms, definitions</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="1"></label>
+        </summary>
+        <div class="bloom-level-content">
+            <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                    <input type="number" class="bloom-num-questions" value="5" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="MCQ" selected>MCQ</option>
+                        <option value="True/False">True/False</option>
+                        <option value="Fill in the Blanks">Fill in the Blanks</option>
+                        <option value="VSA">Very Short Answer</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient" selected>Lenient</option>
+                        <option value="Moderate">Moderate</option>
+                        <option value="Strict">Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="1" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+    <!-- Level 2: Understand -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L2: Understand</h4>
+                <p>Explain, interpret, summarize</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="2"></label>
+        </summary>
+        <div class="bloom-level-content">
+             <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                   <input type="number" class="bloom-num-questions" value="0" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="MCQ" selected>MCQ</option>
+                        <option value="VSA">Very Short Answer</option>
+                        <option value="SA">Short Answer</option>
+                        <option value="AR">Assertion-Reasoning</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient">Lenient</option>
+                        <option value="Moderate" selected>Moderate</option>
+                        <option value="Strict">Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="2" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+    <!-- Level 3: Apply -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L3: Apply</h4>
+                <p>Use concepts in new contexts</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="3"></label>
+        </summary>
+        <div class="bloom-level-content">
+            <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                    <input type="number" class="bloom-num-questions" value="0" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="SA" selected>Short Answer</option>
+                        <option value="LA">Long Answer</option>
+                        <option value="Case Study">Case Study</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient">Lenient</option>
+                        <option value="Moderate" selected>Moderate</option>
+                        <option value="Strict">Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="3" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+    <!-- Level 4: Analyze -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L4: Analyze</h4>
+                <p>Break down, infer patterns, compare</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="4"></label>
+        </summary>
+        <div class="bloom-level-content">
+            <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                    <input type="number" class="bloom-num-questions" value="0" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="SA" selected>Short Answer</option>
+                        <option value="LA">Long Answer</option>
+                        <option value="Case Study">Case Study</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient">Lenient</option>
+                        <option value="Moderate" selected>Moderate</option>
+                        <option value="Strict">Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="4" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+    <!-- Level 5: Evaluate -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L5: Evaluate</h4>
+                <p>Judge, justify using evidence</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="5"></label>
+        </summary>
+        <div class="bloom-level-content">
+             <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                    <input type="number" class="bloom-num-questions" value="0" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="LA" selected>Long Answer</option>
+                        <option value="Case Study">Case Study</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient">Lenient</option>
+                        <option value="Moderate">Moderate</option>
+                        <option value="Strict" selected>Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="5" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+    <!-- Level 6: Create -->
+    <details class="bloom-level-card">
+        <summary>
+            <div class="bloom-level-title">
+                <h4>L6: Create</h4>
+                <p>Design, propose, construct new ideas</p>
+            </div>
+            <label class="toggle-switch-label">Activate <input type="checkbox" class="bloom-level-toggle" data-level="6"></label>
+        </summary>
+        <div class="bloom-level-content">
+            <div class="form-grid-4">
+                <div class="form-group">
+                    <label># of Questions:</label>
+                    <input type="number" class="bloom-num-questions" value="0" min="0" max="20" oninput="window.calculateTotalAssessmentMarks()">
+                </div>
+                <div class="form-group">
+                    <label>Question Types:</label>
+                    <select class="styled-select styled-multiselect bloom-q-types" multiple size="4">
+                        <option value="LA" selected>Long Answer</option>
+                        <option value="Case Study">Case Study</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grading:</label>
+                    <select class="styled-select bloom-strictness">
+                        <option value="Lenient">Lenient</option>
+                        <option value="Moderate">Moderate</option>
+                        <option value="Strict" selected>Strict</option>
+                    </select>
+                </div>
+                <div class="form-group">
+    <label>Marks per Q:</label>
+    <input type="number" class="bloom-marks-input" value="6" min="0.5" step="0.5" oninput="window.calculateTotalAssessmentMarks()">
+</div>
+            </div>
+        </div>
+    </details>
+        </div>
+        <div class="as-total-marks-bar">
+            <span class="as-total-marks-label">Estimated Total Marks:</span>
+            <span id="as-total-marks-display" class="as-total-marks-value">0</span>
+        </div>
+    </div>
+
+    <div class="as-submit-row">
+        <button id="as-generate-from-curriculum-btn" type="submit" class="as-generate-btn">
+            <span>✨</span> Generate Assessment
+        </button>
+    </div>
+</form>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     TAB 2: MY OWN QUESTIONS
+     ══════════════════════════════════════════════════════════════════ -->
+<div id="as-tab-myq" class="as-tab-panel" style="display:none;">
+<form id="as-myq-form">
+
+    <!-- Warning note -->
+    <div class="as-info-strip">
+        <span>⚠️</span>
+        <span>Diagrams from uploads are analyzed internally for grading reference — not regenerated.</span>
+    </div>
+
+    <!-- Hidden fields kept for JS compatibility -->
+    <select id="as-myq-subject-select" class="as-input" required style="display:none;"></select>
+    <select id="as-myq-class-select" class="as-input" required style="display:none;"></select>
+    <select id="as-myq-section-select" class="as-input" style="display:none;"></select>
+    <input type="text" id="as-myq-section-custom" class="as-input" style="display:none;">
+    <div id="as-myq-chapters-list" style="display:none;"></div>
+    <p id="as-myq-chapters-loading" style="display:none;"></p>
+    <select id="as-myq-checking-strictness-select" class="as-input" style="display:none;">
+        <option value="Moderate" selected>Moderate</option>
+        <option value="Lenient">Lenient</option>
+        <option value="Strict">Strict</option>
+    </select>
+
+    <!-- Upload boxes -->
+    <div class="as-upload-row">
+        <!-- Question Paper upload -->
+        <div class="as-upload-box">
+            <div class="as-upload-icon">📄</div>
+            <div class="as-upload-title">Question Paper</div>
+            <div class="as-upload-sub">PNG, JPG, PDF — max 10 files</div>
+            <div class="as-upload-actions">
+                <label for="as-myq-image-upload-input" class="as-upload-btn">
+                    💻 Upload Files
+                </label>
+                <button id="as-myq-capture-btn" type="button" class="as-upload-btn">📷 Camera</button>
+            </div>
+            <input type="file" id="as-myq-image-upload-input" multiple accept="image/*,application/pdf" class="visually-hidden-input">
+            <div id="as-myq-image-preview-area" class="as-preview-area">
+                <p class="image-preview-placeholder">No files selected.</p>
+            </div>
+        </div>
+
+        <!-- Solution Key upload -->
+        <div class="as-upload-box as-upload-box-secondary">
+            <div class="as-upload-icon">🔑</div>
+            <div class="as-upload-title">Solution Key <span class="as-optional-badge">Optional</span></div>
+            <div class="as-upload-sub">Upload your answer key PDF or image</div>
+            <div class="as-upload-actions">
+                <label for="as-myq-solution-upload" class="as-upload-btn as-upload-btn-secondary">
+                    💻 Upload Key
+                </label>
+            </div>
+            <input type="file" id="as-myq-solution-upload" accept="image/*,application/pdf" multiple class="visually-hidden-input">
+            <div id="as-myq-solution-preview" class="as-preview-area file-preview-list">
+                <p class="image-preview-placeholder">No solution key uploaded.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Title + Total Marks side by side -->
+    <div class="as-compact-row" style="margin-top: 20px;">
+        <div class="as-field-group" style="flex:3;">
+            <label for="as-myq-title-input" class="as-label important-label">Assessment Title</label>
+            <input type="text" id="as-myq-title-input" class="as-input" placeholder="e.g., Mid-Term Examination" required>
+        </div>
+        <div class="as-field-group as-field-sm" style="flex:1;">
+            <label for="as-myq-total-marks" class="as-label important-label">Total Marks</label>
+            <input type="number" id="as-myq-total-marks" class="as-input as-myq-total-marks" placeholder="e.g., 80" required>
+        </div>
+    </div>
+
+    <div class="as-submit-row">
+        <button id="as-extract-from-myq-btn" type="submit" class="as-generate-btn as-generate-btn-myq">
+            <span>✍️</span> Extract Questions
+        </button>
+    </div>
+</form>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     TAB 3: FROM A BOOK
+     ══════════════════════════════════════════════════════════════════ -->
+<div id="as-tab-book" class="as-tab-panel" style="display:none;">
+<form id="assessment-creation-book-images-form">
+
+    <!-- Row 1: Subject / Class / Section -->
+    <div class="as-compact-row">
+        <div class="as-field-group">
+            <label for="as-book-subject-select" class="as-label important-label">Subject</label>
+            <select id="as-book-subject-select" class="as-input" required></select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="as-book-class-select" class="as-label important-label">Class</label>
+            <select id="as-book-class-select" class="as-input" required></select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="as-book-section-select" class="as-label">Section</label>
+            <select id="as-book-section-select" class="as-input"></select>
+            <input type="text" id="as-book-section-custom-input" class="as-input" style="display:none; margin-top:6px;">
+        </div>
+    </div>
+
+    <!-- Row 2: Title -->
+    <div class="as-compact-row">
+        <div class="as-field-group" style="flex:1;">
+            <label for="as-book-title-input" class="as-label important-label">Assessment Title</label>
+            <input type="text" id="as-book-title-input" class="as-input" placeholder="e.g., Chapter 5: Light Revision" required>
+        </div>
+    </div>
+
+    <!-- Chapters -->
+    <div class="as-compact-row">
+        <div class="as-field-group" style="flex:1;">
+            <label class="as-label important-label">Select Chapters</label>
+            <div id="as-book-chapters-list" class="modern-checkbox-grid">
+                <p class="info-text">Select Class and Subject to load chapters.</p>
+            </div>
+            <p id="as-book-chapters-loading" class="form-loading-message" style="display:none;">Fetching curriculum chapters…</p>
+        </div>
+    </div>
+
+    <!-- Row 3: Question Type + Number of Questions -->
+    <div class="as-compact-row">
+        <div class="as-field-group">
+            <label class="as-label">Question Type</label>
+            <div class="as-radio-pill-group">
+                <label class="as-radio-pill as-pill-blue">
+                    <input type="radio" name="as-book-qtype" id="as-book-qtype-subj" value="Subjective" checked>
+                    <span>Subjective</span>
+                </label>
+                <label class="as-radio-pill as-pill-purple">
+                    <input type="radio" name="as-book-qtype" id="as-book-qtype-mcq" value="MCQ">
+                    <span>MCQ</span>
+                </label>
+                <label class="as-radio-pill as-pill-red">
+                    <input type="radio" name="as-book-qtype" id="as-book-qtype-comp" value="Competency Based">
+                    <span>Competency</span>
+                </label>
+                <label class="as-radio-pill as-pill-orange">
+                    <input type="radio" name="as-book-qtype" id="as-book-qtype-case" value="Case Study">
+                    <span>Case Study</span>
+                </label>
+            </div>
+        </div>
+        <div class="as-field-group as-field-xs">
+            <label for="as-create-num-q-select" class="as-label">No. of Questions</label>
+            <input type="number" id="as-create-num-q-select" class="as-input as-num-q-select" value="5" min="1" max="10">
+        </div>
+    </div>
+
+    <!-- Row 4: Difficulty + Strictness -->
+    <div class="as-compact-row">
+        <div class="as-field-group">
+            <label class="as-label">Difficulty Level</label>
+            <div class="as-radio-pill-group">
+                <label class="as-radio-pill as-pill-green">
+                    <input type="radio" name="as-book-difficulty" id="as-book-diff-easy" value="Easy">
+                    <span>Easy</span>
+                </label>
+                <label class="as-radio-pill as-pill-amber">
+                    <input type="radio" name="as-book-difficulty" id="as-book-diff-medium" value="Medium" checked>
+                    <span>Medium</span>
+                </label>
+                <label class="as-radio-pill as-pill-red">
+                    <input type="radio" name="as-book-difficulty" id="as-book-diff-hard" value="Hard">
+                    <span>Hard</span>
+                </label>
+            </div>
+        </div>
+        <div class="as-field-group">
+            <label class="as-label">Grading Strictness</label>
+            <div class="as-radio-pill-group">
+                <label class="as-radio-pill">
+                    <input type="radio" name="as-book-strictness" id="as-book-strict-lenient" value="Lenient">
+                    <span>Lenient</span>
+                </label>
+                <label class="as-radio-pill">
+                    <input type="radio" name="as-book-strictness" id="as-book-strict-moderate" value="Moderate" checked>
+                    <span>Moderate</span>
+                </label>
+                <label class="as-radio-pill">
+                    <input type="radio" name="as-book-strictness" id="as-book-strict-strict" value="Strict">
+                    <span>Strict</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Row 5: Upload book pages -->
+    <div class="as-compact-row">
+        <div class="as-upload-box" style="flex:1;">
+            <div class="as-upload-icon">📚</div>
+            <div class="as-upload-title">Textbook Pages</div>
+            <div class="as-upload-sub">PNG, JPG, PDF — max 10 files</div>
+            <div class="as-upload-actions">
+                <label for="as-book-image-upload-input" class="as-upload-btn">💻 Upload from Files</label>
+                <button id="as-book-capture-btn" type="button" class="as-upload-btn">📷 Camera</button>
+            </div>
+            <input type="file" id="as-book-image-upload-input" multiple accept="image/*,application/pdf" class="visually-hidden-input">
+            <div id="as-book-image-preview-area" class="as-preview-area image-preview-area">
+                <p class="image-preview-placeholder">No book page images selected.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="as-submit-row">
+        <button id="as-generate-from-book-btn" type="submit" class="as-generate-btn as-generate-btn-book">
+            <span>📖</span> Generate from Book Pages
+        </button>
+    </div>
+</form>
+</div>
+
+</section>
+
+
+<!-- TEACHER ASSESSMENT AI REVIEW -->
+<section id="teacher-assessment-ai-review-section" class="content-card-no-bg" style="display: none;">
+    <div class="content-card">
+        <h2>Review & Finalize Assessment</h2>
+         <div id="assessment-creation-summary-review" class="review-details-banner">
+            <!-- Summary will be populated by JS -->
+        </div>
+        <h3 class="section-divider-heading"><span class="icon">📝</span> AI-Generated Question Paper</h3>
+        <!-- Insert this ABOVE <div id="assessment-ai-questions-preview-container"> -->
+<div class="form-group" style="background: white; padding: 15px; border-radius: 12px; border: 1px solid var(--border-color-soft); margin-bottom: 20px;">
+    <label style="font-weight: 700; color: var(--text-primary);">📄 General Instructions (Appears at top of paper):</label>
+    <textarea id="assessment-general-instructions" class="editable-feedback-textarea" placeholder="e.g., 1. All questions are compulsory. 2. Section A is Biology..."></textarea>
+</div>
+        <div id="assessment-ai-questions-preview-container">
+            <!-- Question cards will be populated here -->
+        </div>
+    </div>
+<div class="review-actions-footer">
+   
+    <button id="as-add-missing-btn" class="button-secondary">
+        <span class="icon">➕</span> Add Missing Question
+    </button>
+<button id="as-reorder-questions-btn" class="button-secondary"><span class="icon">⇅</span> Reorder</button>
+    <button id="as-print-questions-btn" class="button-secondary"><span class="icon">🖨️</span> Print Questions</button>
+    <button id="as-print-solutions-btn" class="button-secondary"><span class="icon">🔑</span> Print Answer Key</button>
+    <!-- END OF NEW BUTTONS -->
+    <button id="as-regenerate-questions-btn" class="button-secondary accent1-btn"><span class="icon">🔄</span> Add More Questions</button>
+    <button id="as-confirm-save-btn" class="button-primary icon-btn accent-positive-btn"><span class="icon">💾</span> Confirm & Save Assessment</button>
+</div>
+</section>
+
+<!-- END: NEW ANALYTICS HUB SECTION -->
+        <!-- ASSESSMENT CHECKER SECTION -->
+        <!-- REPLACE the entire old teacher-assessment-checker-section with this one -->
+<section id="teacher-assessment-checker-section" class="content-card" style="display: none;" aria-labelledby="assessment-checker-heading">
+    <form id="assessment-checker-form">
+       <div class="form-title-wrapper">
+    <h2 id="assessment-checker-heading">🔍 Assessment Checker</h2>
+    <p>Grade handwritten assessments with AI. Follow the steps below.</p>
+</div>
+        
+        <!-- This info box will ONLY show when grading a pre-made assessment -->
+<div id="grading-mode-info-box" class="info-box grading-mode-header" style="display: none; padding: 10px 16px; border-radius: 10px; align-items: center; gap: 12px; background: linear-gradient(135deg, #f0f4ff, #e8eeff); border: 1px solid #c7d2fe;">
+    <div id="grading-mode-info-content" style="flex:1;">
+        <!-- Content will be populated by JS -->
+    </div>
+<div id="grading-mode-actions" style="display:flex; gap:8px; flex-shrink:0;">
+        <button type="button" id="grading-mode-print-qp-btn" class="button-secondary small-button" style="font-size:0.78rem; padding:5px 10px;"><span class="icon">🖨️</span> Question Paper</button>
+        <button type="button" id="grading-mode-print-sk-btn" class="button-secondary small-button" style="font-size:0.78rem; padding:5px 10px;"><span class="icon">🔑</span> Solution Key</button>
+       <button type="button" id="grading-mode-full-download-btn" class="button-secondary small-button" style="font-size:0.78rem; padding:5px 10px;"><span class="icon">📄</span> Full Details PDF</button>
+    </div>
+</div>
+        <!-- PASTE THIS ENTIRE NEW BLOCK -->
+<details id="view-qp-details-container" class="collapsible-section" style="display: none;">
+  <summary style="display: flex; align-items: center; width: 100%; justify-content: space-between;">
+    <span>View Question Paper & Solution Key</span>
+    <button type="button" class="expand-grading-btn" onclick="event.stopPropagation(); window.handleOpenFullQpView()" style="margin-left: 15px; font-size: 0.8rem; padding: 4px 12px; white-space: nowrap;">
+         ⤢ Fullscreen
+    </button>
+</summary>
+    <div id="grading-mode-qp-display">
+        <!-- Questions will be dynamically populated here by JS -->
+    </div>
+</details>
+
+        <!-- These fieldsets will be HIDDEN when grading a pre-made assessment -->
+        <fieldset id="assessment-details-fieldset" class="assessment-step">
+            <legend>Step 1: Assessment Details</legend>
+            <div class="form-group">
+                <label for="assessment-title-input" class="important-label">Assessment Title:</label>
+                <input type="text" id="assessment-title-input" placeholder="e.g., Physics Unit Test 1, Mid-term Exam">
+            </div>
+            <div class="form-grid-3">
+                <div class="form-group">
+                    <label for="assessment-class-select" class="important-label">Class:</label>
+                    <select id="assessment-class-select" class="styled-select"></select>
+                </div>
+                <div class="form-group">
+                    <label for="assessment-section-select" class="important-label">Section:</label>
+                    <select id="assessment-section-select" class="styled-select"></select>
+                </div>
+                 <div class="form-group">
+                    <label for="assessment-subject-select" class="important-label">Subject:</label>
+                    <select id="assessment-subject-select" class="styled-select"></select>
+                </div>
+            </div>
+        </fieldset>
+
+        <fieldset id="assessment-qp-upload-fieldset" class="assessment-step">
+            <legend>Step 2: Upload Question Paper</legend>
+            <div class="form-group image-upload-group">
+                <label class="important-label" for="assessment-qp-input">Upload Question Paper Image(s)/PDF:</label>
+<input type="file" id="assessment-qp-input" class="styled-file-input" accept="image/*" multiple>
+                <div id="assessment-qp-preview-area" class="image-preview-area"></div>
+            </div>
+        </fieldset>
+
+        <fieldset id="assessment-solution-upload-fieldset" class="assessment-step">
+            <legend>Step 3: Upload Solution Key (Optional)</legend>
+            <div class="form-group image-upload-group">
+                <label for="assessment-solution-input">Upload Solution Key Image(s)/PDF:</label>
+<input type="file" id="assessment-solution-input" class="styled-file-input" accept="image/*" multiple>
+                <div id="assessment-solution-preview-area" class="image-preview-area"></div>
+            </div>
+        </fieldset>
+        <!-- End of hidden fieldsets -->
+
+        <fieldset class="assessment-step" style="border:none; padding:0; margin:0;">
+            <div style="display:none;"></div>
+
+            <!-- START: NEW MASTER STRICTNESS CONTROL -->
+<div class="master-control-wrapper">
+    <!-- Network Speed Pill relocated to the left -->
+    <div id="network-speed-pill" class="network-pill" onclick="window.showSpeedDetails()" style="margin-bottom: 8px; margin-right: auto; align-self: flex-end;">
+        <span class="network-icon">📶</span>
+        <span id="network-speed-text">Detecting Speed...</span>
+    </div>
+
+    <div class="form-group" style="margin-bottom: 0; width: auto; min-width: 250px;">
+        <label for="master-strictness-select">Apply Strictness to All:</label>
+        <select id="master-strictness-select" class="styled-select">
+            <option value="Lenient">Lenient</option>
+            <option value="Moderate" selected>Moderate</option>
+            <option value="Strict">Strict</option>
+        </select>
+    </div>
+
+    <!-- Answer Language Selector — controls Hindi OCR + grading addons on backend -->
+    <!-- English (default): zero extra tokens/cost. Hindi: Devanagari OCR + Hindi feedback injected. -->
+    <div class="form-group" style="margin-bottom: 0; width: auto; min-width: 200px;">
+        <label for="master-language-select">Answer Language:</label>
+        <select id="master-language-select" class="styled-select">
+            <option value="english" selected>🇬🇧 English</option>
+            <option value="hindi">🇮🇳 Hindi (हिंदी)</option>
+        </select>
+<div class="form-group" style="margin-bottom: 0; width: auto;">
+    <label for="skip-cover-pages-select">Skip Cover Pages:</label>
+    <select id="skip-cover-pages-select" class="styled-select" style="min-width:110px;">
+        <option value="0" selected>None (All Pages)</option>
+        <option value="1">Skip 1st page</option>
+        <option value="2">Skip 1st 2 pages</option>
+        <option value="3">Skip 1st 3 pages</option>
+        <option value="4">Skip 1st 4 pages</option>
+        <option value="5">Skip 1st 5 pages</option>
+    </select>
+</div>
+<div class="form-group" style="margin-bottom: 0; width: auto;">
+    <label style="visibility:hidden;">Grade</label>
+    <button type="button" id="grade-all-btn" class="button-primary" onclick="window.handleGradeAllStudents()" style="white-space:nowrap;">
+        ⭐ Grade All (Queue)
+    </button>
+</div>
+    </div>
+
+</div>
+
+<!-- Keep only the context label here -->
+<div class="checker-network-header" style="margin-top: 10px;">
+    <span class="context-label">Student Roster</span>
+</div>
+<!-- END: NEW MASTER STRICTNESS CONTROL -->
+            <div id="assessment-student-roster-container">
+                <p class="info-text">Please select a Class, Section, and Subject to load the student roster.</p>
+            </div>
+        </fieldset>
+        
+
+        
+        <div id="assessment-progress-container" style="display: none;">
+            <h3 class="section-divider-heading"><span class="icon">⏳</span> Grading in Progress...</h3>
+            <p id="assessment-progress-status">Initializing...</p>
+            <ul id="assessment-student-progress-list"></ul>
+        </div>
+    </form>
+
+    <div class="review-actions-footer" id="assessment-checker-footer" style="display: none;">
+    <button id="view-full-class-report-btn" class="button-primary icon-btn" disabled>
+        <span class="icon">📊</span> View Full Class Report
+    </button>
+</div>
+</section>
+
+<!-- Find this section... -->
+<section id="teacher-assessment-report-section" style="display: none;" aria-labelledby="assessment-report-heading">
+
+    <!-- SLIM PREMIUM HEADER BANNER -->
+    <div class="ar-slim-header">
+        <div class="ar-slim-header-left">
+            <span class="ar-slim-title">Assessment Report</span>
+            <span class="ar-slim-subtitle" id="report-assessment-title"></span>
+        </div>
+        <div class="ar-slim-header-right" id="ar-header-quick-stats">
+            <!-- quick stats injected by JS -->
+        </div>
+    </div>
+
+    <!-- STATS DASHBOARD ROW -->
+    <div class="ar-dashboard-row">
+        <!-- Score Distribution Card -->
+        <div class="ar-dash-card ar-dash-chart-card" id="assessment-report-summary-container">
+            <div class="ar-dash-card-title">Score Distribution</div>
+            <div class="ar-dist-bars" id="ar-dist-bars-container">
+                <!-- distribution bars injected by JS -->
+            </div>
+            <canvas id="assessment-score-chart" style="display:none;"></canvas>
+            <div class="stats-grid" id="report-summary-stats" style="display:none;"></div>
+        </div>
+
+        <!-- Top Performers Card -->
+        <div class="ar-dash-card ar-performers-card">
+            <div class="ar-performers-col ar-top-col">
+                <div class="ar-perf-header ar-perf-header-top">🏆 Top Performers</div>
+                <div id="ar-top-performers-list" class="ar-perf-list"></div>
+            </div>
+            <div class="ar-performers-divider"></div>
+            <div class="ar-performers-col ar-help-col">
+                <div class="ar-perf-header ar-perf-header-help">⚠️ Needs Help</div>
+                <div id="ar-needs-help-list" class="ar-perf-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QUESTION-WISE ANALYTICS (hidden) -->
+    <div id="question-analytics-matrix-card" class="content-card" style="display:none;">
+        <h3 class="section-divider-heading"><span class="icon">📈</span> Question Wise Analytics</h3>
+        <p class="description">This matrix plots questions based on class-wide attempt rates and average scores. Red boxes indicate difficult questions, yellow are tricky, and green were well-understood.</p>
+        <div id="analytics-matrix-container"></div>
+    </div>
+
+<!-- 4. DETAILED STUDENT REPORTS -->
+<div class="content-card ar-students-card">
+    <div class="ar-students-card-header">
+        <span class="ar-students-card-label">Detailed Student Reports</span>
+        <div class="ar-students-actions">
+            <button id="send-email-all-btn" class="ar-action-btn" onclick="window.handleSendEmailToAllStudents()">✉️ Email All</button>
+            <button id="download-summary-report-btn" style="display:none;"></button>
+<button id="download-csv-btn" class="ar-action-btn" onclick="window.handleDownloadCSV()" style="display:none">📊 Download CSV</button>
+            <button id="download-all-reports-btn" class="ar-action-btn" onclick="window.handleDownloadAllReports()">📦 Download PDFs</button>
+            <button id="publish-all-reports-btn" class="ar-action-btn ar-action-btn-publish" onclick="window.handlePublishAllReports()">🚀 Publish All</button>
+        </div>
+    </div>
+    <div id="assessment-student-reports-container">
+    </div>
+</div>
+
+<!-- 3. TEACHER ACTIONABLE INSIGHTS -->
+<div id="teacher-actionable-insights-card" class="content-card" style="display: none !important;">
+    <div class="card-header-with-action">
+        <h3 class="section-divider-heading no-margin"><span class="icon">💡</span> Teacher's Actionable Insights</h3>
+        <div class="header-actions">
+            <span id="insights-timestamp" class="timestamp-label"></span>
+             <!-- ADD THIS NEW BUTTON HERE -->
+    <button id="download-insights-btn" class="button-secondary small-button" title="Download Insights Report"><span class="icon">📥</span> Download Report</button>
+            <button id="refresh-insights-btn" class="button-tertiary extra-small-button" title="Refresh AI Insights">🔄</button>
+        </div>
+    </div>
+    <div id="insights-content-area" class="ai-summary-card">
+        <!-- AI-generated insights will be populated here by JS -->
+    </div>
+</div>
+
+<!-- ZERO-COST LOCAL INSIGHTS -->
+<div id="teacher-local-insights-card" class="content-card" style="display:none;">
+    <div class="card-header-with-action">
+        <h3 class="section-divider-heading no-margin"><span class="icon">💡</span> Teacher's Actionable Insights</h3>
+        <div class="header-actions">
+<button id="download-local-insights-btn" class="button-secondary small-button" title="Download Insights Report"><span class="icon">📥</span> Download Report</button>        </div>
+    </div>
+    <div id="local-insights-content" style="margin-top:16px;"></div>
+</div>
+
+</section>
+
+        <!-- TEACHER HOMEWORK CREATION FROM CURRICULUM TOPICS -->
+        <section id="teacher-homework-creation-form-section" class="content-card" style="display: none;" aria-labelledby="hw-creation-form-heading">
+            <!-- ── Tab header (mirrors the Exams tab UX) ─────────────────── -->
+            <div class="as-tab-header">
+                <div class="as-tab-title">Create Assignment</div>
+                <div class="as-tabs">
+                    <button type="button" class="as-tab" data-tab="myq" onclick="window.switchHomeworkTab('myq')">
+                        <span class="as-tab-icon">✍️</span>
+                        <span class="as-tab-label">My Questions</span>
+                    </button>
+                    <button type="button" class="as-tab active" data-tab="ai" onclick="window.switchHomeworkTab('ai')">
+                        <span class="as-tab-icon">💡</span>
+                        <span class="as-tab-label">Using AI</span>
+                    </button>
+                    <button type="button" class="as-tab" data-tab="book" onclick="window.switchHomeworkTab('book')">
+                        <span class="as-tab-icon">📖</span>
+                        <span class="as-tab-label">From a Book</span>
+                    </button>
+                </div>
+            </div>
+            <form id="homework-creation-form">
+                <h2 id="hw-creation-form-heading">💡 Create Assignment Using AI</h2>
+                <p>Define the homework parameters based on curriculum topics and let AI assist you with questions.</p>
+                
+                <div class="hw-info-display-grid">
+                    <div class="hw-info-display-item">
+                        <label>School:</label>
+                        <p id="hw-create-school-display">Not set</p>
+                    </div>
+                    <div class="hw-info-display-item">
+                        <label>Board:</label>
+                        <p id="hw-create-board-display">Not set</p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="hw-create-due-date">Due Date:</label>
+                    <input type="date" id="hw-create-due-date">
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-group">
+                        <label for="hw-create-subject-select" class="important-label">Subject:</label>
+                        <select id="hw-create-subject-select" class="styled-select">
+                            <option value="">-- Select Subject --</option>
+                            <!-- Options will be populated from teacher's profile -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="hw-create-class-select" class="important-label">Class:</label>
+                        <select id="hw-create-class-select" class="styled-select">
+                            <option value="">-- Select Class --</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="hw-create-section-select">Section:</label>
+                    <select id="hw-create-section-select" class="styled-select">
+                        <!-- Options populated by JS -->
+                    </select>
+                    <input type="text" id="hw-create-section-custom" class="custom-section-input" placeholder="Enter custom section name" style="display:none; margin-top: 8px;">
+                </div>
+                <div class="form-group">
+                    <label for="hw-create-chapters-select" class="important-label">Chapters (Ctrl/Cmd + click for multiple):</label>
+                    <select id="hw-create-chapters-select" multiple size="5" class="styled-select styled-multiselect">
+                        <option value="" disabled>-- Select Subject, Class & Board first --</option>
+                    </select>
+                    <p id="chapters-loading-message" class="form-loading-message" style="display:none;">Loading chapters...</p>
+                </div>
+                <div class="form-group">
+                    <label for="hw-create-topics-select">Topics (Ctrl/Cmd + click for multiple):</label>
+                    <select id="hw-create-topics-select" multiple size="6" class="styled-select styled-multiselect">
+                        <option value="" disabled>-- Select Chapter(s) first --</option>
+                    </select>
+                    <p id="topics-loading-message" class="form-loading-message" style="display:none;">Loading topics...</p>
+                </div>
+                
+                <div class="form-grid-2">
+                    </div>
+<!-- INSTRUCTION: In index.html, REPLACE the old builder with this entire block -->
+<div class="form-full-width-section">
+    <div class="builder-header">
+    <h3 class="section-divider-heading">🧠 Bloom's Taxonomy Question Builder</h3>
+    <button type="button" class="button-secondary small-button" onclick="toggleModal('blooms-instructions-modal', true)">
+        <span class="icon">ℹ️</span> Instructions
+    </button>
+</div>
+    <div id="hw-blooms-builder" class="blooms-builder-container">
+        <!-- Level 1 -->
+        <div class="bloom-level-card" data-level="1">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title">
+                    <h4>L1: Remember</h4>
+                    <p>Recall facts, terms, definitions</p>
+                </div>
+                <label class="bloom-activate-toggle">
+                    <span>Activate</span>
+                    <input type="checkbox" class="bloom-level-toggle">
+                    <span class="toggle-switch-ui"></span>
+                </label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="5" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4"><option value="MCQ" selected>MCQ</option><option value="True/False">True/False</option><option value="Fill in the Blanks">Fill in the Blanks</option><option value="VSA">Very Short Answer</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Lenient" selected>Lenient</option><option value="Moderate">Moderate</option><option value="Strict">Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+        <!-- Level 2 -->
+        <div class="bloom-level-card" data-level="2">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L2: Understand</h4><p>Explain, interpret, summarize</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="0" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4"><option value="MCQ" selected>MCQ</option><option value="VSA">Very Short Answer</option><option value="SA">Short Answer</option><option value="AR">Assertion-Reasoning</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Lenient">Lenient</option><option value="Moderate" selected>Moderate</option><option value="Strict">Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+        <!-- Level 3 -->
+        <div class="bloom-level-card" data-level="3">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L3: Apply</h4><p>Use concepts in new contexts</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="0" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4"><option value="MCQ" selected>MCQ</option><option value="SA">Short Answer</option><option value="AR">Assertion-Reasoning</option><option value="DBQ">Data-based Question</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Lenient">Lenient</option><option value="Moderate" selected>Moderate</option><option value="Strict">Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+        <!-- Level 4 -->
+        <div class="bloom-level-card" data-level="4">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L4: Analyze</h4><p>Break down, infer patterns, compare</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="0" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4"><option value="SA" selected>Short Answer</option><option value="LA">Long Answer</option><option value="AR">Assertion-Reasoning</option><option value="DBQ">Data-based Question</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Lenient">Lenient</option><option value="Moderate">Moderate</option><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+        <!-- Level 5 -->
+        <div class="bloom-level-card" data-level="5">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L5: Evaluate</h4><p>Judge, justify using evidence</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="0" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4">><option value="LA" selected>Long Answer</option><option value="DBQ">Data-based Question</option><option value="CS">Case Study</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Moderate">Moderate</option><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+        <!-- Level 6 -->
+        <div class="bloom-level-card" data-level="6">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L6: Create</h4><p>Design, propose, construct new ideas</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># of Questions:</label><input type="number" class="bloom-num-questions" value="0" min="0" max="20"></div>
+                    <div class="form-group"><label>Question Types:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="4"><option value="LA" selected>Long Answer</option><option value="CS">Case Study</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Moderate">Moderate</option><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+                <button id="hw-generate-ai-questions-btn" type="submit" class="button-primary icon-btn"><span class="icon">✨</span> Generate AI Questions</button>
+            </form>
+        </section>
+
+        <!-- TEACHER HOMEWORK CREATION FROM BOOK PAGE IMAGES -->
+        <section id="teacher-homework-creation-book-images-section" class="content-card" style="display: none;" aria-labelledby="hw-book-images-heading">
+            <!-- ── Tab header (mirrors the Exams tab UX) ─────────────────── -->
+            <div class="as-tab-header">
+                <div class="as-tab-title">Create Assignment</div>
+                <div class="as-tabs">
+                    <button type="button" class="as-tab" data-tab="myq" onclick="window.switchHomeworkTab('myq')">
+                        <span class="as-tab-icon">✍️</span>
+                        <span class="as-tab-label">My Questions</span>
+                    </button>
+                    <button type="button" class="as-tab" data-tab="ai" onclick="window.switchHomeworkTab('ai')">
+                        <span class="as-tab-icon">💡</span>
+                        <span class="as-tab-label">Using AI</span>
+                    </button>
+                    <button type="button" class="as-tab active" data-tab="book" onclick="window.switchHomeworkTab('book')">
+                        <span class="as-tab-icon">📖</span>
+                        <span class="as-tab-label">From a Book</span>
+                    </button>
+                </div>
+            </div>
+            <form id="homework-creation-book-images-form">
+                <h2 id="hw-book-images-heading">📖 Create Assignment from Book Pages</h2>
+                <p>Upload images of textbook pages. AI will analyze them to generate questions.</p>
+                
+                <div class="form-group">
+                    <label for="hw-book-due-date-input">Due Date:</label>
+                    <input type="date" id="hw-book-due-date-input">
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-group">
+                        <label for="hw-book-subject-select" class="important-label">Subject:</label>
+                        <select id="hw-book-subject-select" class="styled-select hw-subject-select">
+                            <option value="">-- Select Subject --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="hw-book-class-select" class="important-label">Class:</label>
+                        <select id="hw-book-class-select" class="styled-select hw-class-select">
+                            <option value="">-- Select Class --</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="hw-book-section-select">Section:</label>
+                    <select id="hw-book-section-select" class="styled-select hw-section-select">
+                        <!-- Options populated by JS -->
+                    </select>
+                    <input type="text" id="hw-book-section-custom-input" class="custom-section-input hw-section-custom" placeholder="Enter custom section name" style="display:none; margin-top: 8px;">
+                </div>
+                <div class="form-group">
+                    <label for="hw-book-topic-input">Main Topic/Chapter (Optional, but helps AI focus):</label>
+                    <input type="text" id="hw-book-topic-input" class="hw-topic-input" placeholder="e.g., Photosynthesis, Newton's Laws">
+                </div>
+                <div class="form-grid-2">
+<div class="form-group">
+    <label>Question Type:</label>
+    <div class="option-picker-group">
+        <input type="radio" name="hw-book-qtype" id="hw-book-qtype-subj" value="Subjective" class="visually-hidden-input" checked>
+        <label for="hw-book-qtype-subj" class="option-picker-label" style="background: linear-gradient(135deg, #0984e3, #74b9ff);">Subjective</label>
+        
+        <input type="radio" name="hw-book-qtype" id="hw-book-qtype-comp" value="Competency Based" class="visually-hidden-input">
+        <label for="hw-book-qtype-comp" class="option-picker-label" style="background: linear-gradient(135deg, #d63031, #ff7675);">Competency</label>
+
+        <input type="radio" name="hw-book-qtype" id="hw-book-qtype-case" value="Case Study" class="visually-hidden-input">
+        <label for="hw-book-qtype-case" class="option-picker-label" style="background: linear-gradient(135deg, #e17055, #fab1a0);">Case Study</label>
+
+        <input type="radio" name="hw-book-qtype" id="hw-book-qtype-fill" value="Fill in the Blanks" class="visually-hidden-input">
+        <label for="hw-book-qtype-fill" class="option-picker-label" style="background: linear-gradient(135deg, #6c5ce7, #a29bfe);">Fill in Blanks</label>
+
+        <input type="radio" name="hw-book-qtype" id="hw-book-qtype-tf" value="True/False" class="visually-hidden-input">
+        <label for="hw-book-qtype-tf" class="option-picker-label" style="background: linear-gradient(135deg, #00b894, #55efc4);">True/False</label>
+    </div>
+</div>
+<div class="form-group">
+    <label for="hw-book-num-questions-select">Number of Questions to Generate (1-10):</label>
+    <input type="number" id="hw-book-num-questions-select" class="styled-select hw-num-q-select" value="5" min="1" max="100">
+</div>
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-group">
+    <label>Difficulty Level:</label>
+    <div class="option-picker-group">
+        
+        <input type="radio" name="hw-book-difficulty" id="hw-book-diff-easy" value="Easy" class="visually-hidden-input">
+        <label for="hw-diff-easy" class="option-picker-label option-easy">
+    Easy
+    <span class="option-picker-description">School-level</span>
+</label>
+        
+        <input type="radio" name="hw-book-difficulty" id="hw-book-diff-medium" value="Medium" class="visually-hidden-input" checked>
+       <label for="hw-diff-medium" class="option-picker-label option-medium">
+    Medium
+    <span class="option-picker-description">Board-level</span>
+</label>
+        
+        <input type="radio" name="hw-book-difficulty" id="hw-book-diff-hard" value="Hard" class="visually-hidden-input">
+        <label for="hw-diff-hard" class="option-picker-label option-hard">
+    Hard
+    <span class="option-picker-description">Competitive-level</span>
+</label>
+    </div>
+</div>
+<div class="form-group">
+    <label>Grading Strictness:</label>
+    <div class="option-picker-group">
+        <input type="radio" name="hw-book-strictness" id="hw-book-strict-lenient" value="Lenient" class="visually-hidden-input">
+        <label for="hw-book-strict-lenient" class="option-picker-label option-lenient">Lenient</label>
+        
+        <input type="radio" name="hw-book-strictness" id="hw-book-strict-moderate" value="Moderate" class="visually-hidden-input" checked>
+        <label for="hw-book-strict-moderate" class="option-picker-label option-moderate">Moderate</label>
+        
+        <input type="radio" name="hw-book-strictness" id="hw-book-strict-strict" value="Strict" class="visually-hidden-input">
+        <label for="hw-book-strict-strict" class="option-picker-label option-strict">Strict</label>
+    </div>
+</div>
+                </div>
+                <div class="form-group image-upload-group">
+                    <p class="description">Upload from your computer or use your camera. Allowed formats: PNG, JPG, PDF. Max 10 files.</p>
+                    <div class="image-upload-actions">
+                        <label for="hw-book-image-upload-input" class="button-secondary"><span class="icon">💻</span> Upload from My Files</label>
+                        <button id="hw-book-capture-btn" type="button" class="button-secondary"><span class="icon">📷</span> Capture with Camera</button>
+                    </div>
+                    <input type="file" id="hw-book-image-upload-input" multiple accept="image/*,application/pdf" class="visually-hidden-input">
+                    <div id="hw-book-image-preview-area" class="image-preview-area">
+                        <p class="image-preview-placeholder">No book page images selected.</p>
+                    </div>
+                </div>
+                <button id="hw-generate-from-book-btn" type="submit" class="button-primary icon-btn accent1-btn"><span class="icon">🤖</span> Generate Questions from Pages</button>
+            </form>
+        </section>
+
+        <!-- TEACHER HOMEWORK CREATION FROM QUESTION IMAGES (OCR) -->
+        <section id="teacher-homework-creation-question-images-section" class="content-card as-unified-section" style="display: none;" aria-labelledby="hw-question-images-heading">
+            <!-- ── Tab header (mirrors the Exams tab UX) ─────────────────── -->
+            <div class="as-tab-header">
+                <div class="as-tab-title">Create Assignment</div>
+                <div class="as-tabs">
+                    <button type="button" class="as-tab active" data-tab="myq" onclick="window.switchHomeworkTab('myq')">
+                        <span class="as-tab-icon">✍️</span>
+                        <span class="as-tab-label">My Questions</span>
+                    </button>
+                    <button type="button" class="as-tab" data-tab="ai" onclick="window.switchHomeworkTab('ai')">
+                        <span class="as-tab-icon">💡</span>
+                        <span class="as-tab-label">Using AI</span>
+                    </button>
+                    <button type="button" class="as-tab" data-tab="book" onclick="window.switchHomeworkTab('book')">
+                        <span class="as-tab-icon">📖</span>
+                        <span class="as-tab-label">From a Book</span>
+                    </button>
+                </div>
+            </div>
+            <form id="hw-myq-form" style="padding: 28px;">
+
+    <!-- Warning note -->
+    <div class="as-info-strip">
+        <span>⚠️</span>
+        <span>Diagrams from uploads are analyzed internally for grading reference — not regenerated.</span>
+    </div>
+
+    <!-- Hidden grading strictness for JS compatibility -->
+    <select id="hw-myq-checking-strictness-select" class="styled-select hw-strictness-select" style="display:none;">
+        <option value="Moderate" selected>Moderate</option>
+        <option value="Lenient">Lenient</option>
+        <option value="Strict">Strict</option>
+    </select>
+
+    <!-- Row 1: Due Date / Subject / Class / Section -->
+    <div class="as-compact-row">
+        <div class="as-field-group as-field-sm">
+            <label for="hw-myq-due-date-input" class="as-label">Due Date</label>
+            <input type="date" id="hw-myq-due-date-input" class="as-input">
+        </div>
+        <div class="as-field-group">
+            <label for="hw-myq-subject-select" class="as-label important-label">Subject</label>
+            <select id="hw-myq-subject-select" class="as-input hw-subject-select" required>
+                <option value="">-- Select --</option>
+            </select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="hw-myq-class-select" class="as-label important-label">Class</label>
+            <select id="hw-myq-class-select" class="as-input hw-class-select" required>
+                <option value="">-- Select --</option>
+            </select>
+        </div>
+        <div class="as-field-group as-field-sm">
+            <label for="hw-myq-section-select" class="as-label">Section</label>
+            <select id="hw-myq-section-select" class="as-input hw-section-select"></select>
+            <input type="text" id="hw-myq-section-custom-input" class="as-input hw-section-custom" placeholder="Custom section" style="display:none; margin-top:6px;">
+        </div>
+    </div>
+
+    <!-- Row 2: Topic / Total Marks -->
+    <div class="as-compact-row">
+        <div class="as-field-group" style="flex:3;">
+            <label for="hw-myq-topic-input" class="as-label">Main Topic / Chapter <span class="as-label-hint">(Optional)</span></label>
+            <input type="text" id="hw-myq-topic-input" class="as-input hw-topic-input" placeholder="e.g., Algebra, Plant Cells">
+        </div>
+        <div class="as-field-group as-field-sm" style="flex:1;">
+            <label for="hw-myq-total-marks" class="as-label important-label">Total Marks <span style="color:#ef4444">*</span></label>
+
+            <input type="number" id="hw-myq-total-marks" class="as-input hw-total-marks" placeholder="e.g., 50" required>
+        </div>
+    </div>
+
+    <!-- Row 3: Upload boxes -->
+    <div class="as-upload-row">
+        <div class="as-upload-box">
+            <div class="as-upload-icon">📄</div>
+            <div class="as-upload-title">Question Paper</div>
+            <div class="as-upload-sub">PNG, JPG, PDF — max 10 files</div>
+            <div class="as-upload-actions">
+                <label for="hw-myq-image-upload-input" class="as-upload-btn">💻 Upload Files</label>
+                <button id="hw-myq-capture-btn" type="button" class="as-upload-btn">📷 Camera</button>
+            </div>
+            <input type="file" id="hw-myq-image-upload-input" multiple accept="image/*,application/pdf" class="visually-hidden-input">
+            <div id="hw-myq-image-preview-area" class="as-preview-area">
+                <p class="image-preview-placeholder">No images uploaded yet.</p>
+            </div>
+        </div>
+        <div class="as-upload-box as-upload-box-secondary">
+            <div class="as-upload-icon">🔑</div>
+            <div class="as-upload-title">Solution Key <span class="as-optional-badge">Optional</span></div>
+            <div class="as-upload-sub">Upload your answer key PDF or image</div>
+            <div class="as-upload-actions">
+                <label for="hw-myq-solution-upload" class="as-upload-btn as-upload-btn-secondary">💻 Upload Key</label>
+            </div>
+            <input type="file" id="hw-myq-solution-upload" accept="image/*,application/pdf" class="visually-hidden-input">
+            <div id="hw-myq-solution-preview" class="as-preview-area file-preview-list">
+                <p class="image-preview-placeholder">No solution key uploaded.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="as-submit-row">
+        <button id="hw-extract-from-myq-btn" type="submit" class="as-generate-btn as-generate-btn-myq">
+            <span>✍️</span> Extract Questions
+        </button>
+        <span style="margin:0 12px;color:#aaa;font-size:0.85rem;align-self:center;">or</span>
+        <label for="hw-myq-excel-upload" class="as-generate-btn" style="background:#1B5E20;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">📊 Upload Excel</label>
+        <input type="file" id="hw-myq-excel-upload" accept=".xlsx,.xls" class="visually-hidden-input">
+    </div>
+
+            </form>
+        </section>
+
+        <!-- TEACHER HOMEWORK AI REVIEW -->
+        <section id="teacher-homework-ai-review-section" class="content-card-no-bg" style="display: none;">
+            <div class="content-card">
+                <h2>Review & Finalize Assignment</h2>
+                 <div id="homework-creation-summary-review" class="review-details-banner">
+                    <!-- Summary populated by JS -->
+                </div>
+                <h3 class="section-divider-heading"><span class="icon">📝</span> AI-Generated Questions</h3>
+                <div id="ai-questions-preview-container">
+                    <!-- Question cards will be populated here by JS -->
+                </div>
+            </div>
+            <div class="review-actions-footer">
+                <button id="hw-add-missing-btn" class="button-secondary"> <span class="icon">➕</span> Add Missing Question</button>
+                <button id="hw-print-questions-btn" class="button-secondary"><span class="icon">🖨️</span> Print</button>
+                <button id="hw-regenerate-questions-btn" class="button-secondary accent1-btn"><span class="icon">🔄</span> Add More Questions</button>
+                <div id="hw-grading-mode-selector" style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#f0f4ff;border-radius:10px;border:1px solid #d0d9f0;">
+                    <span style="font-weight:600;font-size:0.9rem;">📋 Grading Mode:</span>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9rem;">
+                        <input type="radio" name="hw-grading-mode" value="self" id="hw-grading-self"> Self Grading (Student grades instantly)
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9rem;">
+                        <input type="radio" name="hw-grading-mode" value="teacher" id="hw-grading-teacher" checked> Teacher Grading (You review & grade)
+                    </label>
+                </div>
+                <button id="hw-confirm-save-btn" class="button-primary icon-btn accent-positive-btn"><span class="icon">💾</span> Confirm & Assign</button>
+            </div>
+        </section>
+
+<!-- ...WITH THIS NEW SECTION -->
+<section id="teacher-view-assigned-homeworks-section" style="display: none;" aria-labelledby="assigned-homeworks-heading">
+    <div class="assigned-homeworks-layout">
+        <!-- Left Column: Homework List -->
+        <div class="homework-list-panel">
+            <div class="history-header">
+                <h2 id="assigned-homeworks-heading">My Assignments</h2>
+                <div class="history-controls">
+                    <button id="homework-search-btn" class="filter-icon-btn" title="Search by Title/Topic">🔍</button>
+                    <button id="homework-sort-btn" class="filter-icon-btn" title="Sort by Date">↕️</button>
+                </div>
+                <div id="homework-search-popup" class="filter-popup">
+                    <div class="form-group">
+                        <label for="homework-search-input">Search by Title/Topic</label>
+                        <input type="search" id="homework-search-input" placeholder="e.g., Photosynthesis...">
+                    </div>
+                </div>
+                <div id="homework-sort-popup" class="filter-popup">
+                    <div class="form-group">
+                        <label for="homework-sort-select">Sort by Date</label>
+                        <select id="homework-sort-select" class="styled-select">
+                            <option value="newest">Newest First</option>
+                            <option value="oldest">Oldest First</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div id="assigned-homeworks-list-container">
+                <!-- Homework cards will be dynamically populated here -->
+            </div>
+            <div id="no-assigned-homeworks-message" class="empty-list-message" style="display:none;">
+                <p>You haven't assigned any homeworks yet.</p>
+                <a href="#" id="see-example-homework-link" class="see-example-link">See an example</a>
+            </div>
+        </div>
+        <!-- Right Column: Analytics Dashboard -->
+        <div id="homework-analytics-dashboard-panel" class="homework-analytics-panel">
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Overall Performance</h3>
+                <div id="homeworks-summary-stats-container" class="stats-grid">
+                    <!-- Overall stats will be rendered here by JS -->
+                </div>
+            </div>
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Average Score per Homework</h3>
+                <div class="chart-wrapper">
+                    <div class="chart-container" style="height: 350px;">
+                        <canvas id="homeworks-page-avg-score-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="content-card">
+                <h3 class="analytics-panel-title">Student Average Performance</h3>
+                <div class="chart-wrapper">
+                    <div class="chart-container" style="height: 400px;">
+                        <canvas id="homeworks-page-student-performance-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+        <!-- HOMEWORK RESULTS DASHBOARD SECTION -->
+<section id="teacher-homework-results-dashboard-section" style="display: none;" aria-labelledby="hw-results-heading">
+    <!-- 1. NEW HEADER -->
+    <div class="results-main-header">
+        <h2 id="hw-results-heading">Homework Results</h2>
+        <p class="results-subtitle">
+            For: <span id="results-hw-name-display"></span>
+            (Class <span id="results-hw-class-display"></span>-<span id="results-hw-section-display"></span>, created on <span id="results-hw-created-display"></span>)
+        </p>
+    </div>
+    
+    <div id="results-content-area" style="display:none;">
+        <p id="results-no-submissions-message" class="info-box" style="display:none;">No student submissions have been received for this homework yet.</p>
+        
+        <!-- 2. PERFORMANCE OVERVIEW -->
+        <h3 class="results-section-title" style="font-size:0.8rem; text-transform:uppercase; letter-spacing:1.5px; color:#888; font-weight:700; margin-bottom:12px;">📈 Performance Overview</h3>
+        <div id="results-summary-stats-container" class="results-summary-stats">
+            <!-- New styled stat cards will be populated here by JS -->
+        </div>
+
+<!-- INSTRUCTIONS: Replace the old #results-class-ai-summary-card div with this one -->
+<div id="results-class-ai-summary-card" class="content-card" style="display: none !important; visibility: hidden; height: 0; overflow: hidden; margin: 0; padding: 0;">
+    <div class="card-header-with-action">
+        <h3 class="results-section-title no-margin"><span class="icon">🧠</span> Class AI Summary</h3>
+        <div class="header-actions">
+            <span id="summary-timestamp" class="timestamp-label"></span>
+            <button class="button-tertiary extra-small-button" onclick="window.handleRefreshHomeworkSummary()" title="Refresh AI Summary">🔄</button>
+        </div>
+    </div>
+    <div id="ai-summary-content-target" class="ai-summary-card">
+        <!-- AI Summary content will be populated here -->
+    </div>
+</div>
+
+        <!-- 4. STUDENT SUBMISSIONS -->
+        <details class="collapsible-section" open>
+            <summary>Student Submissions</summary>
+            <div id="results-student-table-container">
+                <!-- Student submissions table populated by JS -->
+            </div>
+        </details>
+
+        <!-- 5. ASSIGNED QUESTIONS (Now at the bottom) -->
+        <details class="collapsible-section">
+            <summary>Assigned Questions</summary>
+            <div id="results-assigned-questions-container">
+                <!-- Assigned questions list populated by JS -->
+            </div>
+        </details>
+    </div>
+</section>
+
+        <!-- PASTE THIS ENTIRE NEW SECTION -->
+<section id="teacher_homework_summary_analytics_section" style="display: none;">
+    <div class="content-card">
+        <h2>📊 Homework Summary Analytics</h2>
+        <p>An overview of student engagement and performance trends across all assigned homeworks.</p>
+    </div>
+
+    <div class="content-card">
+        <h3 class="section-divider-heading"><span class="icon">📈</span> Overall Performance</h3>
+        <div id="hw-summary-stats-container" class="stats-grid">
+            <!-- Overall stats will be rendered here by JS -->
+            <div class="stat-card">
+                <p class="stat-label">Loading Stats...</p>
+                <div class="spinner-small"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="content-card">
+        <h3 class="section-divider-heading"><span class="icon">✅</span> Chart 1: Homework Participation Rate</h3>
+        <p class="description">Percentage of students from the class roster who submitted each homework. Click a bar to see who did and didn't submit.</p>
+        <div class="chart-wrapper">
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="hw-participation-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="content-card">
+        <h3 class="section-divider-heading"><span class="icon">🎯</span> Chart 2: Average Score per Homework</h3>
+        <p class="description">The average class score for each homework assignment. This helps identify which topics were most challenging for the class as a whole.</p>
+         <div class="chart-wrapper">
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="hw-avg-score-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="content-card">
+        <h3 class="section-divider-heading"><span class="icon">🧑‍🎓</span> Chart 3: Student Average Performance</h3>
+        <p class="description">Each student's average score across all the homeworks they have submitted.</p>
+        <div class="chart-wrapper">
+            <div class="chart-container" style="height: 450px;">
+                <canvas id="hw-student-performance-chart"></canvas>
+            </div>
+        </div>
+    </div>
+</section>
+<!-- END OF NEW SECTION -->
+
+        <!-- STUDENT SUBMISSION DETAIL VIEW -->
+        <section id="teacher-student-submission-detail-section" class="content-card" style="display: none;" aria-labelledby="submission-detail-heading">
+            <div id="submission-detail-header">
+                <h2 id="submission-detail-heading">Student Submission Details</h2>
+                <p><strong>Homework:</strong> <span id="detail-hw-title"></span></p>
+                <p><strong>Student:</strong> <span id="detail-student-name"></span></p>
+                <p><strong>Total Score:</strong> <span id="detail-student-score"></span></p>
+                <p><strong>Submitted On:</strong> <span id="detail-submission-time"></span></p>
+            </div>
+             <div id="detail-overall-feedback-container">
+                <!-- Overall feedback populated by JS -->
+            </div>
+            <h3 class="section-divider-heading"><span class="icon">🧐</span> Question-wise Breakdown</h3>
+            <div id="detail-question-wise-breakdown-container">
+                <!-- Question details populated by JS -->
+            </div>
+        </section>
+
+<!-- START: NEW "KNOW YOUR STUDENT" SECTION -->
+<section id="teacher-know-your-student-section" style="display: none;" aria-labelledby="student-profile-heading">
+    <div class="content-card" id="student-profile-summary-card">
+        <div class="profile-header">
+            <div class="student-avatar"></div>
+            <h2 id="student-profile-heading">Know Your Student</h2>
+        </div>
+        <div id="student-profile-ai-summary">
+            <!-- AI Summary will be loaded here -->
+        </div>
+    </div>
+
+    <div class="profile-content-area">
+        <div class="profile-tabs">
+            <button id="profile-assessment-tab" class="profile-tab-btn active" type="button">Assessments</button>
+            <button id="profile-homework-tab" class="profile-tab-btn" type="button">Homeworks</button>
+        </div>
+
+        <!-- Panel 1: Assessments View -->
+        <div id="profile-assessment-panel" class="profile-tab-panel">
+            <div class="profile-panel-grid">
+                <div class="profile-list-panel" id="profile-assessment-list">
+                    <!-- Assessment history cards will be rendered here -->
+                </div>
+                <div class="profile-chart-panel">
+                    <div class="content-card">
+                        <h3>Performance Over Time</h3>
+                        <div class="chart-container" style="height: 350px;">
+                            <canvas id="profile-assessment-chart-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+
+
+        <!-- Panel 2: Homeworks View -->
+        <div id="profile-homework-panel" class="profile-tab-panel" style="display: none;">
+            <div class="profile-panel-grid">
+                <div class="profile-list-panel" id="profile-homework-list">
+                     <!-- Homework history cards will be rendered here -->
+                </div>
+                <div class="profile-chart-panel">
+                     <div class="content-card">
+                        <h3>Average Score Trend</h3>
+                         <div class="chart-container" style="height: 350px;">
+                            <canvas id="profile-homework-chart-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<section id="teacher-remedial-progress-section" class="content-card" style="display: none;">
+    <div class="card-header-with-action">
+        <h2 id="remedial-progress-title">Remedial Progress</h2>
+    </div>
+    <div id="remedial-progress-content">
+        <!-- Content will be injected by JavaScript -->
+    </div>
+</section>
+<!-- END: NEW "KNOW YOUR STUDENT" SECTION -->
+
+
+<!-- PAL HOME SCREEN -->
+<section id="teacher-pal-home-section" style="display: none;">
+    <div id="pal-home-content"></div>
+</section>
+
+<!-- PAL STUDENT DETAIL -->
+<section id="teacher-pal-student-detail-section" style="display: none;">
+    <div id="pal-student-detail-content"></div>
+</section>
+
+<!-- INDIVIDUAL STUDENT REPORT PAGE -->
+<section id="teacher-assessment-individual-report-section" style="display: none;">
+    <div id="individual-report-page-content">
+        <!-- Content will be dynamically populated here -->
+    </div>
+</section>
+
+    </main>
+    </div> <!-- This closes <div id="main-content-wrapper"> -->
+</div>     <!-- This closes <div id="app-container"> -->
+
+
+
+
+
+    
+
+    <!-- MODALS -->
+
+    <div id="recheck-options-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('recheck-options-modal', false)">&times;</button>
+        <h3 class="modal-title">🔄 Recheck Student Answer</h3>
+        <p class="description">Select which pages you want the AI to re-scan and re-grade. This is useful if the initial OCR was unclear or a mistake was made.</p>
+        
+        <div class="form-group" style="margin-top: 20px;">
+            <label>Pages to Recheck:</label>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button type="button" class="button-secondary" id="btn-recheck-all" onclick="window.handleRecheckType('all')">All Pages</button>
+                <button type="button" class="button-secondary" id="btn-recheck-specific" onclick="window.handleRecheckType('specific')">Specific Pages</button>
+            </div>
+            
+            <div id="specific-pages-input-container" style="display: none;">
+                <input type="text" id="recheck-pages-input" placeholder="e.g. 1, 2, 4">
+                <p class="description" style="margin-top: 5px;">Enter comma-separated page numbers.</p>
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="toggleModal('recheck-options-modal', false)">Cancel</button>
+            <button type="button" id="confirm-recheck-btn" class="button-primary accent-positive-btn">Start Recheck</button>
+        </div>
+    </div>
+</div>
+
+    <!-- START: Bloom's Taxonomy Instructions Modal -->
+<div id="blooms-instructions-modal" class="modal-overlay">
+    <div class="modal-content dark-modal large-modal">
+    <button class="modal-close-btn" onclick="toggleModal('blooms-instructions-modal', false)">&times;</button>
+    <h3 class="modal-title"><span class="icon">ℹ️</span> Question Type & Bloom's Guide</h3>
+    
+    <!-- New Abbreviation Legend Section -->
+    <div class="abbreviation-legend" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 12px; border: 1px solid #4a627a; color: #ecf0f1;">
+        <div style="grid-column: 1 / -1; margin-bottom: 5px; font-weight: 700; color: #3498db; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;">📋 Question Type Abbreviations</div>
+        <div><strong style="color: #3498db;">MC / MCQ:</strong> Multiple Choice</div>
+        <div><strong style="color: #3498db;">LA:</strong> Long Answers</div>
+        <div><strong style="color: #3498db;">DB / DBQ:</strong> Database Question</div>
+        <div><strong style="color: #3498db;">CS:</strong> Case Study</div>
+        <div><strong style="color: #3498db;">VSA:</strong> Very Short Answer</div>
+        <div><strong style="color: #3498db;">SA:</strong> Short Answer</div>
+        <div><strong style="color: #3498db;">AR:</strong> Assertion-Reasoning</div>
+        <div><strong style="color: #3498db;">T/F:</strong> True or False</div>
+    </div>
+
+    <h4 style="margin-bottom: 15px; color: #95a5a6; font-size: 0.9rem; text-transform: uppercase;">⚙️ Default Settings Per Bloom Level</h4>
+    <div class="table-container">
+        <table class="instructions-table">
+            <thead>
+                <tr>
+                    <th>Level</th>
+                    <th>Difficulty Mix</th>
+                    <th>Typical Marks</th>
+                    <th>Default Grading</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>L1: Remember</td><td>Easy 90% / Med 10%</td><td>1—2</td><td>Lenient</td></tr>
+                <tr><td>L2: Understand</td><td>Easy 60% / Med 40%</td><td>2—3</td><td>Lenient → Mod</td></tr>
+                <tr><td>L3: Apply</td><td>Easy 20% / Med 60%</td><td>3—4</td><td>Moderate</td></tr>
+                <tr><td>L4: Analyze</td><td>Easy 10% / Med 50%</td><td>4—5</td><td>Mod → Strict</td></tr>
+                <tr><td>L5: Evaluate</td><td>Med 20% / Hard 80%</td><td>5—8</td><td>Strict</td></tr>
+                <tr><td>L6: Create</td><td>Med 20% / Hard 80%</td><td>6—10</td><td>Strict</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</div>
+<!-- END: Bloom's Taxonomy Instructions Modal -->
+
+<!-- PASTE THIS ENTIRE NEW MODAL BLOCK -->
+<div id="add-missing-question-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('add-missing-question-modal', false)">&times;</button>
+        <h3 class="modal-title">Add a Missing Question</h3>
+        <p>If the AI missed a question, enter its full number below (e.g., "40(d)", "Q5. ii") and the AI will find and add it.</p>
+<form id="add-missing-question-form">
+            <div class="form-group">
+                <label for="missing-question-number-input" class="important-label">Full Question Numbers (comma-separated):</label>
+                <input type="text" id="missing-question-number-input" placeholder="e.g., 28, 29, 30, 31(a)" required>
+                <p class="description" style="margin-top: 5px;">Enter multiple numbers separated by commas to add them all at once.</p>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="button-secondary" onclick="toggleModal('add-missing-question-modal', false)">Cancel</button>
+                <button type="submit" class="button-primary">Find & Add Question</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+    <!-- PASTE THIS ENTIRE MODAL BLOCK with the other modals -->
+<div id="attendance-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('attendance-modal', false)">&times;</button>
+        <h3 id="attendance-modal-title" class="modal-title">Take Attendance</h3>
+        <div id="attendance-modal-content">
+            <!-- Attendance list will be rendered here by JS -->
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="toggleModal('attendance-modal', false)">Cancel</button>
+            <button id="save-attendance-btn" class="button-primary accent-positive-btn">
+                <span class="icon">💾</span> Save Attendance
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- PASTE THIS NEW MODAL FOR THE ERP SYNC TRIAL -->
+<div id="erp-sync-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('erp-sync-modal', false)">&times;</button>
+        <h3 class="modal-title">Sync with School ERP (Trial)</h3>
+        <p>Enter the details for the school's ERP API to test the connection.</p>
+        <div class="form-group">
+            <label for="erp-api-url-input">ERP API URL:</label>
+            <input type="text" id="erp-api-url-input" placeholder="e.g., https://my-dummy-erp.beeceptor.com/students">
+        </div>
+        <div class="form-group">
+            <label for="erp-api-key-input">API Key:</label>
+            <input type="text" id="erp-api-key-input" placeholder="Paste the school's API key here">
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="toggleModal('erp-sync-modal', false)">Cancel</button>
+            <button id="erp-sync-confirm-btn" class="button-primary">Sync Students</button>
+        </div>
+    </div>
+</div>
+
+   <div id="camera-modal" class="modal-overlay">
+    <div class="modal-content full-screen-modal">
+        <!-- Close button for the modal -->
+        <button id="cancel-camera-btn" class="modal-close-btn floating-close">&times;</button>
+        
+        <!-- Flash button with correct positioning class -->
+        <button id="flash-toggle-btn" class="utility-camera-btn top-left-flash">
+            <span id="flash-text">Flash Off</span>
+        </button>
+
+        <!-- Main Viewport for Video and Scanner Overlay -->
+        <div class="camera-scanner-wrapper">
+            <video id="camera-stream" autoplay playsinline></video>
+            <canvas id="scanner-overlay"></canvas>
+            <div id="camera-overlay-status"></div>
+            <div id="scanner-loading" style="display:none;">Initializing Scanner...</div>
+        </div>
+
+        <!-- Bottom Controls Bar -->
+        <div class="camera-controls-overlay">
+            <!-- Left: Preview Strip -->
+            <div id="camera-scroll-previews" class="preview-scroll-container">
+                <!-- Thumbnails will be injected here by JS -->
+            </div>
+
+            <!-- Center: The Shutter (Capture) Button -->
+            <button id="snap-photo-btn" class="shutter-button"></button>
+
+            <!-- Right: Logic Controls -->
+            <div class="camera-actions-right">
+                <button id="auto-capture-btn" class="utility-camera-btn">
+                    <span class="icon">⚡</span> Auto Scan
+                </button>
+                <button id="confirm-camera-captures-btn" class="utility-camera-btn done-btn">
+                    Done <span class="icon">✅</span>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Hidden processing canvas -->
+        <canvas id="camera-canvas" style="display:none;"></canvas>
+    </div>
+</div>
+    
+    <!-- Image Cropper Modal -->
+    <div id="cropper-modal" class="modal-overlay">
+        <div class="modal-content large-modal">
+            <button class="modal-close-btn" id="cancel-crop-btn-x">&times;</button>
+            <h3 class="modal-title">Crop Image</h3>
+            <div class="cropper-container">
+                <img id="image-to-crop">
+            </div>
+            <div class="modal-actions">
+                <button id="cancel-crop-btn" class="button-secondary">Cancel</button>
+                <button id="confirm-crop-btn" class="button-primary">Crop & Use</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add More Questions Modal -->
+    <div id="regeneration-options-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('regeneration-options-modal', false)">&times;</button>
+            <h3 class="modal-title">Add More Questions</h3>
+            <div class="form-group">
+                <label for="regen-num-questions">Number of New Questions (1-10):</label>
+                <input type="number" id="regen-num-questions" class="styled-select" value="3" min="1" max="10">
+            </div>
+            <div class="form-group">
+                <label for="regen-qtype">Question Type:</label>
+                 <select id="regen-qtype" class="styled-select">
+                    <option value="Subjective">Subjective (Short/Long Answer)</option>
+                    <option value="Competency Based">Competency Based</option>
+                    <option value="Case Study">Case Study</option>
+                    <option value="Fill in the Blanks">Fill in the Blanks</option>
+                    <option value="True/False">True/False</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="regen-difficulty">Difficulty Level:</label>
+                <select id="regen-difficulty" class="styled-select">
+                    <option value="Easy">Easy</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Hard">Hard</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="regen-bloom-level">Bloom's Taxonomy Level:</label>
+                <select id="regen-bloom-level" class="styled-select">
+                    <option value="1">L1: Remember</option>
+                    <option value="2">L2: Understand</option>
+                    <option value="3" selected>L3: Apply</option>
+                    <option value="4">L4: Analyze</option>
+                    <option value="5">L5: Evaluate</option>
+                    <option value="6">L6: Create</option>
+                </select>
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="button-secondary" onclick="toggleModal('regeneration-options-modal', false)">Cancel</button>
+                <button id="confirm-regeneration-btn" class="button-primary accent1-btn">Add Questions</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add As More Questions Modal -->
+    <div id="as-regeneration-options-modal" class="modal-overlay">
+  <div class="modal-content large-modal">
+    <button class="modal-close-btn" onclick="toggleModal('as-regeneration-options-modal', false)">&times;</button>
+    <h3 class="modal-title">Add More Questions (Bloom's Taxonomy)</h3>
+    
+    <!-- Added 'modal-scroll-body' class for full height scrolling -->
+    <div id="as-regen-blooms-builder" class="blooms-builder-container modal-scroll-body">
+        
+        <!-- Level 1: Remember (Default ACTIVE) -->
+        <div class="bloom-level-card level-active" data-level="1">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L1: Remember</h4><p>Recall facts, terms</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle" checked><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="MCQ" selected>MCQ</option><option value="True/False">True/False</option><option value="Fill in the Blanks">Fill in the Blanks</option><option value="VSA">Very Short Answer</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Lenient">Lenient</option><option value="Moderate">Moderate</option></select></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level 2: Understand -->
+        <div class="bloom-level-card" data-level="2">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L2: Understand</h4><p>Explain, interpret</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="MCQ" selected>MCQ</option><option value="VSA">Very Short Answer</option><option value="SA">Short Answer</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Moderate" selected>Moderate</option></select></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level 3: Apply -->
+        <div class="bloom-level-card" data-level="3">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L3: Apply</h4><p>Use in new contexts</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="SA" selected>Short Answer</option><option value="MCQ">MCQ</option><option value="DBQ">Data-based</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Moderate" selected>Moderate</option></select></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level 4: Analyze -->
+        <div class="bloom-level-card" data-level="4">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L4: Analyze</h4><p>Break down, compare</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="SA" selected>Short Answer</option><option value="LA">Long Answer</option><option value="DBQ">Data-based</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level 5: Evaluate -->
+        <div class="bloom-level-card" data-level="5">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L5: Evaluate</h4><p>Judge, justify</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="LA" selected>Long Answer</option><option value="CS">Case Study</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level 6: Create -->
+        <div class="bloom-level-card" data-level="6">
+            <div class="bloom-level-summary">
+                <div class="bloom-level-title"><h4>L6: Create</h4><p>Design, construct</p></div>
+                <label class="bloom-activate-toggle"><span>Activate</span><input type="checkbox" class="bloom-level-toggle"><span class="toggle-switch-ui"></span></label>
+            </div>
+            <div class="bloom-level-content">
+                <div class="form-grid-3">
+                    <div class="form-group"><label># Questions:</label><input type="number" class="bloom-num-questions" value="1" min="1" max="10"></div>
+                    <div class="form-group"><label>Type:</label><select class="styled-select styled-multiselect bloom-q-types" multiple size="3"><option value="LA" selected>Long Answer</option><option value="CS">Case Study</option></select></div>
+                    <div class="form-group"><label>Grading:</label><select class="styled-select bloom-strictness"><option value="Strict" selected>Strict</option></select></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-actions">
+        <button type="button" class="button-secondary" onclick="toggleModal('as-regeneration-options-modal', false)">Cancel</button>
+        <button id="confirm-as-regeneration-btn" class="button-primary accent1-btn"><span class="icon">✨</span> Generate</button>
+    </div>
+</div>
+    </div>
+    
+    <!-- Student List Modal -->
+    <div id="student-list-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('student-list-modal', false)">&times;</button>
+            <h3 id="student-list-modal-title" class="modal-title">Student Status</h3>
+            <div id="student-list-modal-content">
+                <!-- Content injected by JS -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Student Insights Modal -->
+    <div id="student-insights-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('student-insights-modal', false)">&times;</button>
+            <h3 id="student-insights-modal-title" class="modal-title">AI Insights</h3>
+            <div id="student-insights-modal-content">
+                <!-- Insights populated by JS -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Create New Class/Batch Modal -->
+    <div id="create-class-batch-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('create-class-batch-modal', false)">&times;</button>
+            <h3 class="modal-title">Create New Class Batch</h3>
+             <div class="info-box" style="background-color: #eaf4fb; border-color: var(--accent-interactive-primary); margin-top:0; margin-bottom:25px;">
+                <h4 style="color: var(--accent-interactive-primary-hover);"><span class="icon">💡</span> How It Works</h4>
+                <p><strong>Step 1: Create Your Class:</strong> Define a "batch" for each class, section, and subject you teach (e.g., Class 8, Section A, Physics).</p>
+                <p><strong>Step 2: Instruct Your Students:</strong> Ask students to register themselves on the student platform at the link below. They must use the <strong>exact same School, Board, Class, and Section</strong> details as this class to be automatically added to your roster.</p>
+                <p>
+                  <a href="https://student-platform-f13-93763943290.us-west1.run.app" target="_blank" class="button-secondary" style="display: inline-block; text-decoration: none;">
+                    Student Registration Platform
+                  </a>
+                </p>
+            </div>
+            <form id="create-class-batch-form">
+                <p>Define a new class you teach (e.g., Class 8, Section A, Physics).</p>
+                <div class="form-group">
+                    <label for="create-class-batch-class-select" class="important-label">Class/Grade:</label>
+                    <select id="create-class-batch-class-select" class="styled-select" required>
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="create-class-batch-section-select" class="important-label">Section:</label>
+                    <select id="create-class-batch-section-select" class="styled-select" required>
+                        <!-- Populated by JS -->
+                    </select>
+                     <input type="text" id="create-class-batch-section-custom-input" class="custom-section-input" placeholder="Enter custom section name" style="display:none; margin-top: 8px;">
+                </div>
+                 <div class="form-group">
+                    <label for="create-class-batch-subject-select" class="important-label">Subject:</label>
+                    <select id="create-class-batch-subject-select" class="styled-select" required>
+                       <!-- Populated by JS -->
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" onclick="toggleModal('create-class-batch-modal', false)">Cancel</button>
+                    <button type="submit" class="button-primary">Create Class</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Class Roster Modal -->
+    <div id="class-roster-modal" class="modal-overlay">
+        <div class="modal-content large-modal">
+            <button class="modal-close-btn" onclick="toggleModal('class-roster-modal', false)">&times;</button>
+            <h3 id="class-roster-modal-title" class="modal-title">Class Roster</h3>
+            <div id="class-roster-modal-content">              
+                 <h4 style="margin-top: 25px;">Current Roster (<span id="roster-student-count">0</span>)</h4>
+                 <div id="roster-student-list-container">
+                    <ul class="roster-student-list">
+                        <li>No students in this class yet.</li>
+                    </ul>
+                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Post Class Creation Invite Modal -->
+    <div id="post-class-creation-invite-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('post-class-creation-invite-modal', false)">&times;</button>
+            <h3 class="modal-title">🎉 Class Created Successfully!</h3>
+            <p>Share this invite code or link with your students so they can join the class.</p>
+            <div class="invite-info-container">
+                <div class="invite-code-display">
+                    <label>Invite Code:</label>
+                    <div class="code-box">
+                        <span id="new-class-invite-code"></span>
+                        <button id="copy-new-class-code-btn" type="button" class="button-tertiary">Copy</button>
+                    </div>
+                </div>
+                 <div class="invite-link-display">
+                    <label>Invite Link:</label>
+                    <div class="link-box">
+                        <input type="text" id="new-class-invite-link-input" readonly>
+                        <button id="copy-new-class-link-btn" type="button" class="button-tertiary">Copy Link</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="button-primary" onclick="toggleModal('post-class-creation-invite-modal', false)">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Homework Options Modal — REPLACED BY TABS.
+         The "How do you want to create homework?" popup is gone; the three
+         choices are now tabs at the top of each homework creation section
+         (see .as-tab-header), matching the Exams UX exactly.
+         Kept as an empty hidden element so existing JS that references these
+         button IDs keeps working — same approach used for Assessments above. -->
+    <div id="create-homework-options-modal" style="display:none;">
+        <button id="create-hw-from-ai-btn" style="display:none;"></button>
+        <button id="create-hw-from-myq-btn" style="display:none;"></button>
+        <button id="create-hw-from-book-btn" style="display:none;"></button>
+    </div>
+    
+<!--
+    PASTE THIS ENTIRE NEW MODAL BLOCK
+-->
+<!-- Modal kept as empty hidden element for JS compatibility -->
+<div id="create-assessment-options-modal" style="display:none;">
+    <button id="create-as-from-ai-btn" style="display:none;"></button>
+    <button id="create-as-from-myq-btn" style="display:none;"></button>
+    <button id="create-as-from-book-btn" style="display:none;"></button>
+</div>
+
+
+<!-- Copy Assessment Modal -->
+<div id="copy-assessment-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('copy-assessment-modal', false)">&times;</button>
+        <h3 class="modal-title">Copy Assessment to Another Class</h3>
+        <p>Create an exact duplicate of this assessment for a different batch.</p>
+        <form id="copy-assessment-form">
+            <div class="form-grid-2">
+                <div class="form-group">
+                    <label for="copy-as-subject-select" class="important-label">Target Subject:</label>
+                    <select id="copy-as-subject-select" class="styled-select" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="copy-as-class-select" class="important-label">Target Class:</label>
+                    <select id="copy-as-class-select" class="styled-select" required></select>
+                </div>
+            </div>
+          <div class="form-group">
+    <label class="important-label">Target Section(s):</label>
+    <div id="copy-as-section-container" class="checkbox-group-container" style="max-height: 150px; overflow-y: auto; border: 1px solid #d1d5db; padding: 10px; border-radius: 8px; background: #fff;">
+        <p class="description">Select Class and Subject first.</p>
+    </div>
+</div>
+            <div class="modal-actions">
+                <button type="button" class="button-secondary" onclick="toggleModal('copy-assessment-modal', false)">Cancel</button>
+                <button type="submit" class="button-primary accent-positive-btn"><span class="icon">content_copy</span> Copy & Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+    <!-- Global Help Modal -->
+    <div id="global-help-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('global-help-modal', false)">&times;</button>
+            <h3 id="global-help-modal-title" class="modal-title">Help</h3>
+            <div id="global-help-modal-content">
+                <!-- Content injected by JS -->
+            </div>
+            <div class="ai-assistant-container">
+                <h4>Still need help? Ask our AI assistant!</h4>
+                <div class="ai-help-input-group">
+                    <input type="text" id="ai-help-input" placeholder="e.g., How do I grade an assessment?">
+                    <button id="ai-help-ask-btn" class="button-primary">Ask</button>
+                </div>
+                <div id="ai-help-response-area" class="ai-help-response">
+                     <!-- AI response here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Contact Help Modal -->
+     <div id="contact-help-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="toggleModal('contact-help-modal', false)">&times;</button>
+            <h3 class="modal-title">Help Centre</h3>
+            <p>If you're facing technical issues or need further assistance, please don't hesitate to reach out to our support team.</p>
+            <ul>
+                <li><strong>Email:</strong> support@funscholar.com</li>
+                <li><strong>WhatsApp:</strong> +91-9876543210</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- PASTE THIS ENTIRE NEW MODAL BLOCK -->
+<div id="view-question-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('view-question-modal', false)">&times;</button>
+        <h3 id="view-question-modal-title" class="modal-title">Question Details</h3>
+        <div id="view-question-modal-content">
+            <!-- Question and answer will be injected here by JS -->
+        </div>
+        <div class="modal-actions">
+            <button class="button-primary" onclick="toggleModal('view-question-modal', false)">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Full Question Paper Viewer Modal -->
+<div id="view-full-qp-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('view-full-qp-modal', false)">&times;</button>
+        <h3 class="modal-title">Reference: Question Paper & Solution Key</h3>
+        <div id="full-qp-modal-content" style="flex-grow: 1; overflow-y: auto; padding: 25px; background: #f8f9fa; border-radius: 12px; margin-top: 15px; border: 1px solid var(--border-color-soft);">
+            <!-- Content will be cloned here by JavaScript -->
+        </div>
+        <div class="modal-actions">
+            <button class="button-primary" onclick="toggleModal('view-full-qp-modal', false)">Close View</button>
+        </div>
+    </div>
+</div>
+
+<div id="image-viewer-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('image-viewer-modal', false)">&times;</button>
+        <button id="img-viewer-prev" class="img-nav-btn prev">‹</button>
+        <button id="img-viewer-next" class="img-nav-btn next">›</button>
+        
+        <div id="image-viewer-container" class="split-viewer-layout">
+            <div class="viewer-pane image-pane">
+                <!-- Image injected here -->
+            </div>
+<div class="viewer-pane ocr-pane" style="display:none;">
+    <div class="pane-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <span>Transcription</span>
+ <button id="toggle-qc-view-btn" class="button-tertiary extra-small-button" style="color: #3498db; border: 1px solid #3498db; padding: 2px 8px; font-size: 0.7rem;">
+            🔍 QC Table
+        </button>
+    </div>
+    <div id="ocr-text-display" class="ocr-content-box"></div>
+</div>
+</div>
+
+        <!-- ADD THIS BLOCK HERE -->
+        <div id="img-viewer-camera-actions" style="display:none; justify-content: center; gap: 15px; padding: 20px; background: #000; border-top: 1px solid #333;">
+            <button id="viewer-retake-btn" class="button-secondary"><span class="icon">🔄</span> Retake</button>
+            <button id="viewer-edit-btn" class="button-primary"><span class="icon">✂️</span> Edit / Crop</button>
+        </div>
+    </div>
+</div>
+
+<!-- Raw OCR Transcript Modal -->
+<div id="raw-ocr-modal" class="modal-overlay">
+    <div class="modal-content large-modal" style="background: #121212; border: 1px solid #333;">
+        <button class="modal-close-btn" onclick="toggleModal('raw-ocr-modal', false)" style="color: #fff;">&times;</button>
+        <h3 class="modal-title" style="color: #fff; border-bottom: 1px solid #333;">Raw AI-Input Transcript</h3>
+        <p class="description" style="margin-bottom: 15px; color: #888;">This is the exact string with page markers [PAGE N] used for grading.</p>
+        <div id="raw-ocr-content-box" class="terminal-view" style="flex-grow: 1; height: 65vh; white-space: pre-wrap; font-family: 'Courier New', monospace; padding: 20px; overflow-y: auto; background: #000; color: #00FF00; border-radius: 8px; border: 1px solid #222; font-size: 0.9rem; line-height: 1.5;">
+            <!-- Content injected via textContent -->
+        </div>
+        <div class="modal-actions" style="border-top: 1px solid #333; padding-top: 15px;">
+            <button class="button-secondary" onclick="toggleModal('raw-ocr-modal', false)">Close Transcript</button>
+        </div>
+    </div>
+</div>
+
+
+
+
+    <!-- Grading Progress Modal -->
+<div id="grading-progress-modal" class="modal-overlay">
+    <div class="modal-content">
+        <h3 class="modal-title">Grading in Progress...</h3>
+        <p id="grading-progress-status">Initializing...</p>
+        <ul id="grading-progress-list" class="assessment-progress-list">
+            <!-- Progress for each student will be shown here -->
+        </ul>
+        <div id="grading-modal-actions" class="modal-actions" style="display: none;">
+            <button type="button" class="button-primary" onclick="toggleModal('grading-progress-modal', false)">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- START: NEW FEATURE LOCKED MODAL -->
+<div id="feature-locked-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('feature-locked-modal', false)">&times;</button>
+        <h3 class="modal-title">🔒 Feature Not Enabled</h3>
+        <p>This feature is not currently enabled for your school.</p>
+        <p>Please contact your school administrator to request access.</p>
+        <div class="modal-actions">
+            <button type="button" class="button-primary" onclick="toggleModal('feature-locked-modal', false)">OK</button>
+        </div>
+    </div>
+</div>
+<!-- END: NEW FEATURE LOCKED MODAL -->
+
+<!-- START: Credit Information Modal -->
+<div id="credits-info-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('credits-info-modal', false)">&times;</button>
+        <h3 class="modal-title">🪙 Credit Information</h3>
+        <div id="credits-modal-content">
+            <!-- Content will be populated by JavaScript -->
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="button-primary" onclick="toggleModal('credits-info-modal', false)">OK</button>
+        </div>
+    </div>
+</div>
+<!-- END: Credit Information Modal -->
+
+
+    <!-- Printable Content Area (Hidden) -->
+    <div id="printable-content" class="printable-area"></div>
+    
+
+
+    <!-- View History List Modal -->
+<div id="view-history-list-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('view-history-list-modal', false)">&times;</button>
+        <h3 id="history-list-modal-title" class="modal-title">History</h3>
+        <div id="history-list-modal-content">
+            <!-- List will be populated by JS -->
+        </div>
+    </div>
+</div>
+
+
+
+
+<!-- Fullscreen Grading Modal -->
+<div id="fullscreen-grading-modal" class="modal-overlay">
+    <div class="modal-content fullscreen-grading-content">
+        <div class="fs-grading-header">
+            <h3 id="fs-student-name-title">Student Name</h3>
+            <div class="fs-header-actions">
+                <button class="button-secondary small-button" id="fs-global-marker-edit-toggle" onclick="window.toggleGlobalMarkerEdit()">
+    <span class="icon">✏️</span> Edit Markers
+</button>
+<button class="expand-grading-btn" onclick="window.handleGradingUndo()" title="Undo (Ctrl+Z)"><span class="icon">↩️</span> Undo</button>
+                <button class="button-primary small-button" onclick="toggleModal('fullscreen-grading-modal', false)">
+                    close
+                </button>
+            </div>
+        </div>
+
+        <div id="fs-grading-container" class="fs-scroll-layout">
+            <!-- Rows will be injected here: [Image | Transcript | Feedback] -->
+        </div>
+    </div>
+</div>
+<!-- AI Training / Mistake Report Modal -->
+<div id="ai-training-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('ai-training-modal', false)">&times;</button>
+       <div class="modal-header" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; width: 100%;">
+    <div>
+        <h3 style="margin:0;">🧠 Train AI / Report Mistake</h3>
+        <p style="margin:5px 0 0 0; color: #7f8c8d; font-size: 0.9rem;">Teach the AI to grade better by correcting this specific mistake.</p>
+    </div>
+    <button type="button" class="button-secondary small-button" onclick="window.handleOpenRuleManager()">
+        <span class="icon">📜</span> Manage Rules
+    </button>
+</div>
+        
+        <form id="ai-training-form">
+            <!-- Context Row -->
+            <div class="form-grid-2">
+                <div class="form-group">
+                    <label>Subject (Optional)</label>
+                    <select id="train-subject" class="styled-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>Chapter / Topic (Optional)</label>
+                    <input type="text" id="train-chapter" class="styled-select" placeholder="e.g. Newton's Laws (Optional)">
+                </div>
+            </div>
+
+            <!-- Question Context -->
+            <div class="form-group" style="background: #f9f9fb; padding: 10px; border-radius: 8px;">
+                <label>Question:</label>
+                <p id="train-question-text" style="margin: 5px 0; font-weight: 500;">...</p>
+            </div>
+
+           <!-- Box 1: Student Answer (With Re-OCR Capability) -->
+            <div class="form-group">
+                <label class="important-label">Box 1: Student Answer / Context</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+                   <button type="button" id="btn-transcribe-student-answer" style="display: none;" class="button-secondary small-button">
+                        <span class="icon">👁️</span> Auto-Read (OCR)
+                    </button>
+                    <!-- NEW BUTTONS -->
+                    <label for="train-image-upload" class="button-secondary small-button" style="cursor: pointer;">
+                        <span class="icon">📁</span> Add Image
+                    </label>
+                    <input type="file" id="train-image-upload" accept="image/*" class="visually-hidden-input" multiple>
+                    
+                    <button type="button" id="train-capture-btn" class="button-secondary small-button">
+                        <span class="icon">📷</span> Capture
+                    </button>
+                </div>
+                <!-- NEW PREVIEW AREA -->
+                <div id="train-image-preview" class="image-preview-area" style="margin-bottom: 10px; min-height: 0;">
+                    <!-- Images will appear here -->
+                </div>
+                
+                <textarea id="train-student-answer" class="editable-feedback-textarea" placeholder="What did the student actually write or draw?" rows="3"></textarea>
+            </div>
+
+            <!-- Box 2: AI's Mistake -->
+            <div class="form-grid-2">
+                <div class="form-group">
+                    <label>Current AI Feedback (Reference)</label>
+                    <div id="train-existing-feedback" style="font-size: 0.85rem; color: #555; padding: 10px; background: #eee; border-radius: 8px; max-height: 100px; overflow-y: auto;"></div>
+                </div>
+                <div class="form-group">
+                    <label class="important-label">Box 2: What did the AI do wrong?</label>
+                    <textarea id="train-ai-mistake" class="editable-feedback-textarea" placeholder="e.g., Marked it correct but unit was missing." rows="3"></textarea>
+                </div>
+            </div>
+
+            <!-- Box 3: The Rule -->
+            <div class="form-group">
+                <label class="important-label" style="color: #8e44ad;">Box 3: The Correction Rule (Instruction)</label>
+                 <!-- ADD THIS CHECKBOX BLOCK -->
+    <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+        <input type="checkbox" id="train-is-global" style="width: auto; margin: 0;">
+        <label for="train-is-global" style="margin: 0; font-weight: 500; font-size: 0.9rem; color: #2c3e50;">
+            Apply this rule globally (to all questions & subjects)
+        </label>
+    </div>
+    <!-- END ADDITION -->
+                <textarea id="train-correction-rule" class="editable-feedback-textarea" placeholder="Strict instruction: e.g., 'If force is calculated without direction, deduct 1 mark.'" rows="3" style="border-color: #8e44ad;"></textarea>
+            </div>
+
+            <!-- Box 4: Concept Tags (RAG) -->
+            <div class="form-group">
+                <label class="important-label">Box 4: Concept Tags (For Semantic Search)</label>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="train-tags-input" class="styled-select" placeholder="e.g. Vectors, SI Units (Comma separated)">
+                    <button type="button" id="btn-generate-tags" class="button-secondary small-button" style="white-space: nowrap;">
+                        <span class="icon">✨</span> Generate Tags
+                    </button>
+                </div>
+                <div id="train-tags-container" class="keyword-pills-container"></div>
+            </div>
+
+            <div class="form-group">
+    <label class="important-label">Trigger Step (Where should this rule apply?)</label>
+    <select id="train-target-step" class="styled-select" required>
+        <option value="Grading" selected>Grading Logic (Step 3)</option>
+        <option value="OCR">Vision/Reading Logic (Step 2)</option>
+    </select>
+    <p class="description">Use OCR for rules about reading handwriting/layout. Use Grading for logic/marking rules.</p>
+</div>
+
+            <div class="modal-actions" style="border-top: 1px solid #eee; padding-top: 20px;">
+                <button type="button" class="button-secondary" onclick="toggleModal('ai-training-modal', false)">Cancel</button>
+                <button type="submit" id="btn-save-training" class="button-primary accent-positive-btn">
+                    <span class="icon">🧠</span> Train System
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- RAG Logic Inspector Modal -->
+<div id="rag-debug-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('rag-debug-modal', false)">&times;</button>
+        <div class="rag-header">
+            <h3 class="modal-title" style="border:0; margin:0;">🧠 AI Logic Inspector</h3>
+            <span id="rag-memory-status" class="rag-status-pill">Checking Memory...</span>
+        </div>
+        
+        <div class="rag-dashboard-grid">
+            <!-- Left: Logs -->
+            <div class="rag-panel">
+                <h4>System Logs</h4>
+                <div id="rag-system-logs" class="terminal-view">
+                    <!-- Logs injected here -->
+                </div>
+            </div>
+
+            <!-- Right: Active Rules -->
+            <div class="rag-panel">
+                <h4>Active Correction Rules (RAG Memory)</h4>
+                <div class="info-box" style="margin: 0 0 10px 0; padding: 8px; font-size: 0.85rem;">
+                    These rules were retrieved based on the subject and are currently loaded in the AI's short-term memory.
+                </div>
+                <div id="rag-rules-container" class="rag-rules-list">
+                    <!-- Rules cards injected here -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- Single Question Generation Modal (For OR/Sub-parts) -->
+<div id="single-question-gen-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('single-question-gen-modal', false)">&times;</button>
+        <h3 id="single-gen-modal-title" class="modal-title">Generate Question</h3>
+        
+       <form id="single-gen-form">
+            <!-- Context Display -->
+            <div class="info-box" style="margin-top: 0; padding: 10px; font-size: 0.9rem;">
+                <p style="margin:0;"><strong>Parent Context:</strong> <span id="single-gen-parent-topic">...</span></p>
+                <p style="margin:5px 0 0 0; color: var(--text-secondary);" id="single-gen-constraints-display">...</p>
+            </div>
+
+            <!-- New Chapter & Topic Selection -->
+            <div class="form-group" style="background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color-soft);">
+                <label class="important-label" style="color: var(--accent-interactive-primary);">Option A: Select from Curriculum</label>
+                
+                <label for="single-gen-chapter" style="font-size: 0.85rem; margin-top: 8px;">Chapter:</label>
+                <select id="single-gen-chapter" class="styled-select" onchange="window.handleSingleGenChapterChange()">
+                    <option value="">-- Select Chapter --</option>
+                </select>
+
+                <label for="single-gen-topics" style="font-size: 0.85rem; margin-top: 12px;">Topics (Select Multiple):</label>
+                <select id="single-gen-topics" class="styled-select styled-multiselect" multiple size="4">
+                    <option value="" disabled>-- Select Chapter First --</option>
+                </select>
+            </div>
+
+            <div style="text-align: center; margin: 15px 0; font-weight: bold; color: var(--text-secondary);">- OR -</div>
+
+            <div class="form-group">
+                <label for="single-gen-topic" class="important-label">Option B: Custom Input</label>
+                <input type="text" id="single-gen-topic" class="styled-select" placeholder="e.g., Photosynthesis process">
+                <p class="description">Type specific instructions or a topic not listed above.</p>
+            </div>
+
+            <div class="form-grid-2">
+                <div class="form-group">
+                    <label for="single-gen-marks">Marks:</label>
+                    <input type="number" id="single-gen-marks" class="styled-select" step="0.5" min="1">
+                </div>
+                <!-- Wrapped in ID for hiding/showing -->
+                <div class="form-group" id="single-gen-type-wrapper">
+                    <label for="single-gen-type">Question Type:</label>
+                    <select id="single-gen-type" class="styled-select">
+                        <option value="Subjective">Subjective</option>
+                        <option value="MCQ">MCQ</option>
+                        <option value="True/False">True/False</option>
+                        <option value="Fill in the Blanks">Fill in the Blanks</option>
+                        <option value="Competency Based">Competency Based</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="button-secondary" onclick="toggleModal('single-question-gen-modal', false)">Cancel</button>
+                <!-- Added style="color: white !important" -->
+                <button type="submit" id="btn-generate-single" class="button-primary accent1-btn" style="color: white !important;">
+                    <span class="icon">✨</span> Generate
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<!-- START: NEW FLOATING ACTION BUTTON (FAB) & MODAL -->
+
+<!-- This is the container for the floating button group -->
+<div id="fab-container" class="fab-container">
+<div class="fab-menu">
+    <button id="fab-grade-btn" class="fab-action-btn" data-tooltip="Grade">
+        <span class="icon">✔️</span>
+        <span class="fab-label">Grade</span>
+    </button>
+    <button id="fab-view-btn" class="fab-action-btn" data-tooltip="View">
+        <span class="icon">👀</span>
+        <span class="fab-label">View</span>
+    </button>
+    <button id="fab-create-btn" class="fab-action-btn" data-tooltip="Create">
+        <span class="icon">➕</span>
+        <span class="fab-label">Create</span>
+    </button>
+</div>
+    <button id="fab-toggle-btn" class="fab-main-btn" title="Open Quick Actions">
+        <span class="icon">⚡</span>
+    </button>
+</div>
+
+<!-- Reorder Questions Modal -->
+<div id="reorder-questions-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('reorder-questions-modal', false)">&times;</button>
+        <h3 class="modal-title">Reorder Questions</h3>
+        <p class="description">Drag and drop items to reorder. The numbering will update automatically on save.</p>
+        
+        <div id="reorder-list-container" class="reorder-container">
+            <!-- Items injected by JS -->
+        </div>
+
+        <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="toggleModal('reorder-questions-modal', false)">Cancel</button>
+            <button id="save-reorder-btn" class="button-primary">Save Order</button>
+        </div>
+    </div>
+</div>
+
+<!-- This is the new multi-step modal for the shortcut flows -->
+<div id="shortcut-modal" class="modal-overlay">
+    <div class="modal-content">
+        <button class="modal-close-btn" onclick="toggleModal('shortcut-modal', false)">&times;</button>
+        <div class="shortcut-modal-header">
+            <h3 id="shortcut-modal-title" class="modal-title">Quick Action</h3>
+            <!-- THIS IS THE NEW STEPPER ELEMENT -->
+            <div id="shortcut-modal-stepper" class="shortcut-stepper"></div>
+        </div>
+        <div id="shortcut-modal-content">
+            <!-- Content will be dynamically populated by JavaScript -->
+        </div>
+    </div>
+</div>
+
+
+<!-- END: NEW FLOATING ACTION BUTTON (FAB) & MODAL -->
+
+<!-- Global Grading Mini-Player (PIP) -->
+<div id="grading-pip-widget" class="grading-pip-hidden" onclick="window.handleReturnToGrading()">
+    <div class="pip-content">
+        <div class="pip-icon-container">
+            <div class="spinner-tiny"></div>
+        </div>
+        <div class="pip-info">
+            <span class="pip-status-label">Grading in Progress...</span>
+            <div class="pip-progress-container">
+                <div id="pip-progress-bar" class="pip-progress-fill"></div>
+            </div>
+            <span id="pip-queue-text" class="pip-subtext">0 students remaining</span>
+        </div>
+    </div>
+</div>
+
+<div id="rule-manager-modal" class="modal-overlay">
+    <div class="modal-content large-modal">
+        <button class="modal-close-btn" onclick="toggleModal('rule-manager-modal', false)">&times;</button>
+        <h3 class="modal-title">Correction Rules Manager</h3>
+        <!-- Ensure flex-grow is present here -->
+        <div id="rule-manager-list" class="shortcut-item-list" style="flex-grow: 1; overflow-y: auto;">
+            <!-- List items injected here -->
+        </div>
+    </div>
+</div>
+
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>

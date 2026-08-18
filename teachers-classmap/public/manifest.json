@@ -1,0 +1,21 @@
+{
+  "name": "ClassMap Teacher Hub",
+  "short_name": "ClassMap",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f8",
+  "theme_color": "#3498db",
+  "description": "An AI-powered homework and assessment tool for teachers.",
+  "icons": [
+    {
+      "src": "images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
